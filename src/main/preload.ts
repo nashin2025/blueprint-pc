@@ -22,10 +22,20 @@ import type {
  */
 
 const api = {
-  listProjects: (): Promise<Project[]> => ipcRenderer.invoke('projects:list'),
+  listProjects: (includeArchived?: boolean): Promise<Project[]> =>
+    ipcRenderer.invoke('projects:list', includeArchived ?? false),
   getProject: (id: string): Promise<Project | null> => ipcRenderer.invoke('projects:get', id),
   saveProject: (project: Project): Promise<Project> => ipcRenderer.invoke('projects:save', project),
   deleteProject: (id: string): Promise<boolean> => ipcRenderer.invoke('projects:delete', id),
+  archiveProject: (id: string, archived: boolean): Promise<boolean> =>
+    ipcRenderer.invoke('projects:archive', { id, archived }),
+  purgeProject: (id: string): Promise<boolean> => ipcRenderer.invoke('projects:purge', id),
+  duplicateProject: (id: string): Promise<Project> =>
+    ipcRenderer.invoke('projects:duplicate', id),
+  exportProject: (args: { id: string; outputPath: string }): Promise<string> =>
+    ipcRenderer.invoke('projects:export', args),
+  importProject: (zipPath: string): Promise<string> =>
+    ipcRenderer.invoke('projects:import', zipPath),
 
   loadSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: AppSettings): Promise<AppSettings> =>

@@ -107,6 +107,7 @@ export function blankProject(spec: DesignSpec): Project {
     id: newId('prj'),
     createdAt: now,
     updatedAt: now,
+    archived: false,
     spec,
     chat: [],
     versions: [

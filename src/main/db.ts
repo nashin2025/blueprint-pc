@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS projects (
   id          TEXT PRIMARY KEY,
   title       TEXT NOT NULL,
   created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  updated_at  INTEGER NOT NULL,
+  archived    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS project_specs (
@@ -176,6 +177,12 @@ function migrate(db: Database.Database): void {
   if (!pinCols.some((c) => c.name === 'electrical_type')) {
     db.exec('ALTER TABLE component_pins ADD COLUMN electrical_type TEXT')
   }
+
+  // Add archived column to projects if missing
+  const projCols = db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]
+  if (!projCols.some((c) => c.name === 'archived')) {
+    db.exec('ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+  }
 }
 
 /** Decompose a Project into the normalized tables, in a single transaction. */
@@ -187,16 +194,18 @@ export function saveProject(project: Project): Project {
   conn.transaction(() => {
     // Upsert project header
     conn.prepare(
-      `INSERT INTO projects (id, title, created_at, updated_at)
-       VALUES (@id, @title, @createdAt, @updatedAt)
+      `INSERT INTO projects (id, title, created_at, updated_at, archived)
+       VALUES (@id, @title, @createdAt, @updatedAt, @archived)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
-         updated_at = excluded.updated_at`
+         updated_at = excluded.updated_at,
+         archived = excluded.archived`
     ).run({
       id: project.id,
       title: spec.title,
       createdAt: project.createdAt,
-      updatedAt: now
+      updatedAt: now,
+      archived: project.archived ? 1 : 0
     })
 
     // Upsert spec
@@ -361,7 +370,7 @@ export function getProject(id: string): Project | null {
   const conn = database()
 
   const projRow = conn.prepare('SELECT * FROM projects WHERE id = ?').get(id) as
-    | { id: string; title: string; created_at: number; updated_at: number }
+    | { id: string; title: string; created_at: number; updated_at: number; archived: number }
     | undefined
   if (!projRow) return null
 
@@ -499,6 +508,7 @@ export function getProject(id: string): Project | null {
     id: projRow.id,
     createdAt: projRow.created_at,
     updatedAt: projRow.updated_at,
+    archived: projRow.archived === 1,
     spec: {
       title: projRow.title,
       summary: specRow.summary,
@@ -516,11 +526,16 @@ export function getProject(id: string): Project | null {
   }
 }
 
-/** List all projects, most recently updated first. */
-export function listProjects(): Project[] {
+/** List all projects, most recently updated first.
+ *  Archived projects are excluded unless includeArchived is true. */
+export function listProjects(includeArchived = false): Project[] {
   const conn = database()
   const rows = conn
-    .prepare('SELECT id FROM projects ORDER BY updated_at DESC')
+    .prepare(
+      includeArchived
+        ? 'SELECT id FROM projects ORDER BY updated_at DESC'
+        : 'SELECT id FROM projects WHERE archived = 0 ORDER BY updated_at DESC'
+    )
     .all() as { id: string }[]
 
   const projects: Project[] = []
@@ -533,6 +548,22 @@ export function listProjects(): Project[] {
 
 /** Delete a project and all its related rows. */
 export function deleteProject(id: string): boolean {
+  const conn = database()
+  const result = conn.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  return result.changes > 0
+}
+
+/** Archive or unarchive a project (soft delete / restore). */
+export function archiveProject(id: string, archived: boolean): boolean {
+  const conn = database()
+  const result = conn
+    .prepare('UPDATE projects SET archived = ? WHERE id = ?')
+    .run(archived ? 1 : 0, id)
+  return result.changes > 0
+}
+
+/** Permanently purge a project and all its related rows (no restore). */
+export function purgeProject(id: string): boolean {
   const conn = database()
   const result = conn.prepare('DELETE FROM projects WHERE id = ?').run(id)
   return result.changes > 0

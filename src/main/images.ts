@@ -24,7 +24,8 @@ const MIME_BY_EXT: Record<string, string> = {
   '.avif': 'image/avif'
 }
 
-function imagesDir(): string {
+/** The app's own images directory: <appData>/blueprint-pc/data/images. */
+export function imagesDir(): string {
   return sharedImagesDir()
 }
 
