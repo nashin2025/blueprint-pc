@@ -107,6 +107,16 @@ export function ChevronIcon({ size = 16, className }: IconProps) {
   )
 }
 
+export function CartIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <circle cx="1" cy="1" r="1" />
+      <circle cx="5" cy="1" r="1" />
+      <path d="M1 21h16.5a1 1 0 0 0 0-.5H14a1 1 0 0 0 0-.5H3a1 1 0 0 0 0-.5H1zM23 22a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v3.5h14V3a1 1 0 0 1 1-1h1a1 1 0 0 1 1 1v3.5h1a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1h-1a1 1 0 0 1-1-1H23v1z" />
+    </svg>
+  )
+}
+
 export function ArchiveIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size, className)}>

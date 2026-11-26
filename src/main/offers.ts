@@ -127,13 +127,13 @@ async function fetchHtml(url: string): Promise<string | null> {
 export async function getOffers(
   partName: string,
   force = false
-): Promise<{ offers: ParsedOffer[]; strict: boolean; searchTerm: string }> {
+): Promise<{ offers: ParsedOffer[]; strict: boolean; searchTerm: string; fetchedAt: number }> {
   const key = cacheKey(partName)
   const cache = readCache()
   const hit = cache[key]
 
   if (!force && hit && Date.now() - hit.fetchedAt < CACHE_TTL_MS) {
-    return { offers: hit.offers, strict: hit.strict, searchTerm: hit.searchTerm }
+    return { offers: hit.offers, strict: hit.strict, searchTerm: hit.searchTerm, fetchedAt: hit.fetchedAt }
   }
 
   const term = searchTermFor(partName)
@@ -182,7 +182,8 @@ export async function getOffers(
 
   const ranked = rankOffers(matched.offers)
 
-  cache[key] = { fetchedAt: Date.now(), offers: ranked, strict: matched.strict, searchTerm: term }
+  const fetchedAt = Date.now()
+  cache[key] = { fetchedAt, offers: ranked, strict: matched.strict, searchTerm: term }
   // Keep the cache from growing without bound.
   const entries = Object.entries(cache)
   if (entries.length > 200) {
@@ -194,5 +195,5 @@ export async function getOffers(
     writeCache(cache)
   }
 
-  return { offers: ranked, strict: matched.strict, searchTerm: term }
+  return { offers: ranked, strict: matched.strict, searchTerm: term, fetchedAt }
 }

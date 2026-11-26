@@ -130,6 +130,28 @@ CREATE TABLE IF NOT EXISTS design_versions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_design_versions_project ON design_versions(project_id);
+
+CREATE TABLE IF NOT EXISTS carts (
+  id          TEXT PRIMARY KEY,
+  project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_at  INTEGER NOT NULL,
+  updated_at  INTEGER NOT NULL,
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_carts_project ON carts(project_id);
+
+CREATE TABLE IF NOT EXISTS cart_items (
+  id             TEXT PRIMARY KEY,
+  cart_id        TEXT NOT NULL REFERENCES carts(id) ON DELETE CASCADE,
+  component_id   TEXT NOT NULL REFERENCES project_components(id) ON DELETE CASCADE,
+  quantity       INTEGER NOT NULL DEFAULT 1,
+  retailer_url   TEXT,
+  added_at       INTEGER NOT NULL,
+  FOREIGN KEY (cart_id) REFERENCES carts(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_cart_items_cart ON cart_items(cart_id);
 `
 
 let db: Database.Database | null = null
@@ -182,6 +204,31 @@ function migrate(db: Database.Database): void {
   const projCols = db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]
   if (!projCols.some((c) => c.name === 'archived')) {
     db.exec('ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // Create cart tables if missing
+  const cartCols = db.prepare("PRAGMA table_info(carts)").all() as { name: string }[]
+  if (cartCols.length === 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS carts (
+        id          TEXT PRIMARY KEY,
+        project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        created_at  INTEGER NOT NULL,
+        updated_at  INTEGER NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_carts_project ON carts(project_id);
+      CREATE TABLE IF NOT EXISTS cart_items (
+        id             TEXT PRIMARY KEY,
+        cart_id        TEXT NOT NULL REFERENCES carts(id) ON DELETE CASCADE,
+        component_id   TEXT NOT NULL REFERENCES project_components(id) ON DELETE CASCADE,
+        quantity       INTEGER NOT NULL DEFAULT 1,
+        retailer_url   TEXT,
+        added_at       INTEGER NOT NULL,
+        FOREIGN KEY (cart_id) REFERENCES carts(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_cart_items_cart ON cart_items(cart_id);
+    `)
   }
 }
 
@@ -569,6 +616,27 @@ export function purgeProject(id: string): boolean {
   return result.changes > 0
 }
 
+/** Save or update a design version for a project. */
+export function saveProjectVersion(projectId: string, version: DesignVersion): void {
+  const conn = database()
+  conn.prepare(
+    `INSERT INTO design_versions (id, project_id, label, created_at, prompt, spec_snapshot)
+     VALUES (@id, @projectId, @label, @createdAt, @prompt, @specSnapshot)
+     ON CONFLICT(id) DO UPDATE SET
+       label = excluded.label,
+       created_at = excluded.created_at,
+       prompt = excluded.prompt,
+       spec_snapshot = excluded.spec_snapshot`
+  ).run({
+    id: version.id,
+    projectId,
+    label: version.label,
+    createdAt: version.createdAt,
+    prompt: version.prompt ?? null,
+    specSnapshot: JSON.stringify(version.spec)
+  })
+}
+
 /** Absolute path of the database file, for the "show data folder" action. */
 export function dataFilePath(): string {
   return filePath()
@@ -598,4 +666,132 @@ export async function migrateFromJson(jsonPath: string): Promise<number> {
   } catch {
     return 0
   }
+}
+
+/** Get the cart for a project, creating it if it doesn't exist. */
+export function getOrCreateCart(projectId: string): { id: string; createdAt: number; updatedAt: number } {
+  const conn = database()
+  const row = conn.prepare('SELECT * FROM carts WHERE project_id = ?').get(projectId) as
+    | { id: string; created_at: number; updated_at: number }
+    | undefined
+  if (row) return { id: row.id, createdAt: row.created_at, updatedAt: row.updated_at }
+
+  const id = `${projectId}_cart_${Date.now()}`
+  const now = Date.now()
+  conn.prepare(
+    'INSERT INTO carts (id, project_id, created_at, updated_at) VALUES (@id, @projectId, @createdAt, @updatedAt)'
+  ).run({ id, projectId, createdAt: now, updatedAt: now })
+  return { id, createdAt: now, updatedAt: now }
+}
+
+/** Add a component to the cart. If already present, increment quantity. */
+export function addToCart(cartId: string, componentId: string, quantity = 1, retailerUrl?: string): void {
+  const conn = database()
+  const now = Date.now()
+
+  // Touch the cart's updated_at
+  conn.prepare('UPDATE carts SET updated_at = ? WHERE id = ?').run(now, cartId)
+
+  const existing = conn
+    .prepare('SELECT * FROM cart_items WHERE cart_id = ? AND component_id = ?')
+    .get(cartId, componentId) as { id: string; quantity: number } | undefined
+
+  if (existing) {
+    conn.prepare(
+      'UPDATE cart_items SET quantity = quantity + ?, added_at = ? WHERE id = ?'
+    ).run(quantity, now, existing.id)
+  } else {
+    conn.prepare(
+      `INSERT INTO cart_items (id, cart_id, component_id, quantity, retailer_url, added_at)
+       VALUES (@id, @cartId, @componentId, @quantity, @retailerUrl, @addedAt)`
+    ).run({
+      id: `${cartId}_item_${Date.now()}`,
+      cartId,
+      componentId,
+      quantity,
+      retailerUrl: retailerUrl ?? null,
+      addedAt: now
+    })
+  }
+}
+
+/** Remove a component from the cart. */
+export function removeFromCart(cartId: string, componentId: string): boolean {
+  const conn = database()
+  const result = conn
+    .prepare('DELETE FROM cart_items WHERE cart_id = ? AND component_id = ?')
+    .run(cartId, componentId)
+  return result.changes > 0
+}
+
+/** Clear all items from a cart. */
+export function clearCart(cartId: string): void {
+  const conn = database()
+  conn.prepare('DELETE FROM cart_items WHERE cart_id = ?').run(cartId)
+}
+
+/** List all items in a cart with component details. */
+export interface CartItem {
+  id: string
+  componentId: string
+  componentName: string
+  componentPartName: string | null
+  quantity: number
+  retailerUrl: string | null
+  addedAt: number
+  unitPrice: number | null
+  unitPriceCurrency: string
+}
+
+export function listCartItems(cartId: string): CartItem[] {
+  const conn = database()
+  const rows = conn
+    .prepare(
+      `SELECT ci.id, ci.component_id, pc.name, pc.part_name, pc.unit_price, pc.unit_price_currency,
+              ci.quantity, ci.retailer_url, ci.added_at
+       FROM cart_items ci
+       JOIN project_components pc ON ci.component_id = pc.id
+       WHERE ci.cart_id = ?
+       ORDER BY ci.added_at`
+    )
+    .all(cartId) as Array<{
+    id: string
+    component_id: string
+    name: string
+    part_name: string | null
+    unit_price: number | null
+    unit_price_currency: string
+    quantity: number
+    retailer_url: string | null
+    added_at: number
+  }>
+
+  return rows.map((r) => ({
+    id: r.id,
+    componentId: r.component_id,
+    componentName: r.name,
+    componentPartName: r.part_name,
+    quantity: r.quantity,
+    retailerUrl: r.retailer_url,
+    addedAt: r.added_at,
+    unitPrice: r.unit_price,
+    unitPriceCurrency: r.unit_price_currency
+  }))
+}
+
+/** Export cart items as CSV text. */
+export function exportCart(cartId: string): string {
+  const items = listCartItems(cartId)
+  const lines = [
+    'Component,Part Name,Quantity,Unit Price,Currency,Retailer URL,Added At'
+  ]
+  for (const item of items) {
+    const added = new Date(item.addedAt).toISOString()
+    lines.push(
+      `"${item.componentName}","${item.componentPartName ?? ''}",${item.quantity},${
+        item.unitPrice ?? ''
+      },"${item.unitPriceCurrency}","${item.retailerUrl ?? ''}","${added}"`
+    )
+  }
+  return lines.join('\n') + '\n'
 }

@@ -22,6 +22,8 @@ interface Props {
   component: Component
   spec: DesignSpec
   offers: StoreOffer[]
+  /** Unix ms when the retailer offers were last fetched, for staleness UI. */
+  fetchedAt: number
   loading: boolean
   strict: boolean
   onBack: () => void
@@ -45,6 +47,7 @@ export default function PartDetail({
   component,
   spec,
   offers,
+  fetchedAt,
   loading,
   strict,
   onBack
@@ -122,6 +125,7 @@ export default function PartDetail({
                 {approxUsd(cheapest.price, cheapest.currency)
                   ? ` · ${approxUsd(cheapest.price, cheapest.currency)}`
                   : ''}
+                <PriceStaleness fetchedAt={fetchedAt} />
               </div>
             </>
           ) : (
@@ -325,6 +329,21 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h3 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-ink-faint">{title}</h3>
       {children}
     </section>
+  )
+}
+
+/** Small badge showing how old retailer price data is. */
+function PriceStaleness({ fetchedAt }: { fetchedAt: number }) {
+  const STALE_DAYS = 7
+  const days = Math.round((Date.now() - fetchedAt) / 86400000)
+  const stale = days > STALE_DAYS
+  if (days <= 0 || !stale) return null
+  return (
+    <span
+      className="ml-1 inline-block text-[9px] uppercase tracking-wider text-warn border border-warn/30 bg-warn/10 px-1.5 py-0.5 rounded"
+    >
+      stale ({days}d)
+    </span>
   )
 }
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ComponentType } from 'react'
-import type { Component, Project } from '@shared/types'
+import type { Component, DesignVersion, DrcSummary, DrcViolation, Project } from '@shared/types'
 import { useApp } from '../state/useApp'
 import { DIFFICULTY_LABELS, DIFFICULTY_STYLES, currency, relativeTime } from '../lib/format'
 import { exportBomCsv, exportProjectJson, exportWiringSvg } from '../lib/export'
@@ -40,6 +40,10 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
   const { upsertProject, removeProject } = useApp()
   const [menuOpen, setMenuOpen] = useState(false)
   const [inspectorComponent, setInspectorComponent] = useState<Component | null>(null)
+  const [drcViolations, setDrcViolations] = useState<{ violations: DrcViolation[]; summary: DrcSummary } | null>(null)
+  const [drcChecking, setDrcChecking] = useState(false)
+  const [versionDialogOpen, setVersionDialogOpen] = useState(false)
+  const [versions, setVersions] = useState<DesignVersion[]>([])
 
   const spec = project.spec
   const partsCost = spec.components.reduce((sum, c) => sum + (c.unitPrice ?? 0) * c.quantity, 0)
@@ -71,6 +75,54 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
     const nextSpec: typeof spec = { ...spec, components: nextComponents }
     await upsertProject({ ...project, spec: nextSpec })
     setInspectorComponent(null)
+  }
+
+  async function checkDrc() {
+    setDrcChecking(true)
+    try {
+      const res = await window.api.designRunDrc(project.id)
+      if (res.ok && res.data) setDrcViolations(res.data)
+    } catch {
+      // Ignore
+    } finally {
+      setDrcChecking(false)
+    }
+  }
+
+  async function saveVersion() {
+    const label = prompt('Version name', `Version ${Date.now()}`)
+    if (!label) return
+    setVersionDialogOpen(false)
+    try {
+      const res = await window.api.designSaveVersion({
+        projectId: project.id,
+        label,
+        prompt: undefined
+      })
+      if (res.ok) {
+        const listRes = await window.api.designListVersions(project.id)
+        if (listRes.ok && listRes.data) setVersions(listRes.data)
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  async function loadVersions() {
+    const res = await window.api.designListVersions(project.id)
+    if (res.ok && res.data) setVersions(res.data)
+  }
+
+  async function restoreVersion(versionId: string) {
+    const res = await window.api.designRestoreVersion({
+      projectId: project.id,
+      versionId
+    })
+    if (res.ok && res.data) {
+      setVersionDialogOpen(false)
+      // Reload the page to reflect the restored spec
+      window.location.reload()
+    }
   }
 
   // On project load, populate modelUrl for any component that doesn't have one
@@ -200,6 +252,28 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
             </div>
 
             <button
+              onClick={checkDrc}
+              disabled={drcChecking}
+              className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-dim transition hover:bg-surface-1 hover:text-ink"
+            >
+              {drcChecking ? (
+                <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+              ) : (
+                <span>Check DRC</span>
+              )}
+            </button>
+            <button
+              onClick={() => {
+                setVersionDialogOpen(true)
+                void loadVersions()
+              }}
+              className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-dim transition hover:bg-surface-1 hover:text-ink"
+            >
+              <ListIcon size={14} />
+              Versions
+            </button>
+
+            <button
               onClick={() => void onDelete()}
               title="Delete project"
               className="btn-ghost hover:bg-danger/5 hover:text-danger"
@@ -227,6 +301,58 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
             )
           })}
         </nav>
+
+        {drcViolations && drcViolations.summary.total > 0 && (
+          <div className="px-6 py-4">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="flex size-8 items-center justify-center rounded-lg bg-danger/10 text-danger">
+                <TrashIcon size={16} />
+              </div>
+              <div>
+                <div className="text-sm font-medium text-ink">Design Rule Check</div>
+                <div className="flex gap-3 text-[11px] font-mono">
+                  <span className={`text-danger font-bold`}>{drcViolations.summary.errors} errors</span>
+                  <span className={`text-warning font-bold`}>{drcViolations.summary.warnings} warnings</span>
+                  <span className="text-ink-dim">{drcViolations.summary.total} total</span>
+                </div>
+              </div>
+            </div>
+            <div className="overflow-y-auto max-h-48 border border-line rounded-lg p-3 bg-surface-1/50">
+              <table className="w-full text-left text-[12px]">
+                <thead>
+                  <tr>
+                    <th className="pb-1 text-ink-faint font-medium">Severity</th>
+                    <th className="pb-1 text-ink-faint font-medium">Issue</th>
+                    <th className="pb-1 text-ink-faint font-medium">Component</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drcViolations.violations.map((v) => (
+                    <tr key={v.id} className="border-t border-line/30">
+                      <td className="py-1.5">
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                            v.severity === 'error'
+                              ? 'text-danger bg-danger/10'
+                              : v.severity === 'warning'
+                                ? 'text-warning bg-warning/10'
+                                : 'text-ink-dim bg-surface-2'
+                          }`}
+                        >
+                          {v.severity}
+                        </span>
+                      </td>
+                      <td className="py-1.5 text-ink truncate">{v.message}</td>
+                      <td className="py-1.5 text-ink-faint truncate">
+                        {v.componentName ?? v.pinName ?? v.designator ?? '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-surface-0">
@@ -250,6 +376,81 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
           onChange={(updates) => void onComponentUpdate(inspectorComponent.id, updates)}
           onClose={() => setInspectorComponent(null)}
         />
+      )}
+
+      {versionDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm" onClick={() => setVersionDialogOpen(false)} />
+          <div className="relative z-10 w-full max-w-md p-6 bg-surface-0 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold tracking-tight">Versions</h3>
+              <button onClick={() => setVersionDialogOpen(false)} className="btn-ghost p-1.5 hover:bg-surface-1">
+                <span className="sr-only">Close</span>
+                <TrashIcon size={16} className="text-ink-dim" />
+              </button>
+            </div>
+            <div className="max-h-60 overflow-y-auto">
+              {versions.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-10 text-center">
+                  <p className="text-[12px] text-ink-dim">No saved versions yet.</p>
+                  <button
+                    onClick={() => {
+                      setVersionDialogOpen(false)
+                      void saveVersion()
+                    }}
+                    className="mt-4 btn-secondary"
+                  >
+                    Save first version
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {versions.map((v) => (
+                    <div
+                      key={v.id}
+                      className="flex items-center justify-between p-2 rounded-lg border border-line bg-surface-1 hover:bg-surface-2 cursor-pointer"
+                      onClick={() => {
+                        setVersionDialogOpen(false)
+                        void restoreVersion(v.id)
+                      }}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm font-medium truncate">{v.label}</div>
+                        <div className="text-[11px] text-ink-faint">
+                          {new Date(v.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setVersionDialogOpen(false)
+                            void restoreVersion(v.id)
+                          }}
+                          className="btn-ghost p-1 hover:bg-surface-2"
+                          title="Restore"
+                        >
+                          <ListIcon size={14} className="text-accent" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="mt-4 pt-4 border-t border-line">
+              <button
+                onClick={() => {
+                  setVersionDialogOpen(false)
+                  void saveVersion()
+                }}
+                className="btn-primary w-full"
+              >
+                Save current version
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

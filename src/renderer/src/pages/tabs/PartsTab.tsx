@@ -86,6 +86,7 @@ export default function PartsTab({ spec, onSelectComponent }: Props) {
         component={selected}
         spec={spec}
         offers={result?.offers ?? []}
+        fetchedAt={result?.fetchedAt ?? Date.now()}
         loading={!!loading[selected.id]}
         strict={result?.strict ?? true}
         onBack={() => setSelectedId(null)}
@@ -202,15 +203,18 @@ export default function PartsTab({ spec, onSelectComponent }: Props) {
                         currency(c.unitPrice)
                       )}
                     </td>
-                    <td className="px-4 py-2.5 text-right">
-                      {loading[c.id] ? (
-                        <span className="inline-block size-3 animate-spin-slow rounded-full border-2 border-line border-t-accent" />
-                      ) : best ? (
-                        <BestPrice offer={best} />
-                      ) : (
-                        <span className="text-[13px] text-ink-faint">—</span>
-                      )}
-                    </td>
+              <td className="px-4 py-2.5 text-right">
+                {loading[c.id] ? (
+                  <span className="inline-block size-3 animate-spin-slow rounded-full border-2 border-line border-t-accent" />
+                ) : best ? (
+                  <div className="flex items-baseline gap-2">
+                    <BestPrice offer={best} />
+                    <PriceStaleness fetchedAt={result?.fetchedAt ?? 0} />
+                  </div>
+                ) : (
+                  <span className="text-[13px] text-ink-faint">—</span>
+                )}
+              </td>
                     <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-0.5">
                         {onSelectComponent && (
@@ -340,5 +344,21 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
     >
       <path d="M9 6l6 6-6 6" />
     </svg>
+  )
+}
+
+/** Small badge showing how old retailer price data is. */
+function PriceStaleness({ fetchedAt }: { fetchedAt: number }) {
+  const STALE_DAYS = 7
+  const days = Math.round((Date.now() - fetchedAt) / 86400000)
+  const stale = days > STALE_DAYS
+  if (days <= 0) return null
+  if (!stale) return null
+  return (
+    <span
+      className="ml-1 inline-block text-[9px] uppercase tracking-wider text-warn border border-warn/30 bg-warn/10 px-1.5 py-0.5 rounded"
+    >
+      stale ({days}d)
+    </span>
   )
 }

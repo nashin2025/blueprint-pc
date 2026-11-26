@@ -25,6 +25,7 @@ import { layoutPackage, pinCategory } from '../src/renderer/src/lib/packageLayou
 import { normalisePin, parseCurrency, parsePriceValue } from '../src/main/sync/schematik-parse.ts'
 import { MVR_PER_USD, approxUsd, formatNative, isComparable, toUsd } from '../src/shared/money.ts'
 import type { Component, Connection } from '../src/shared/types.ts'
+import { runDrc, summarizeDrc } from '../src/main/drc.ts'
 
 let failures = 0
 let checks = 0
@@ -476,6 +477,133 @@ check('isStale: 6 days 23 hours is not stale', !isStaleInline(now - 6 * dayMs - 
 check('isStale: 7 days + 1 ms is stale', isStaleInline(now - 7 * dayMs - 1, 7))
 check('isStale: 30 days is stale', isStaleInline(now - 30 * dayMs, 7))
 check('isStale: 1 day with 30 day threshold is not stale', !isStaleInline(now - dayMs, 30))
+
+// ---------------------------------------------------------------------------
+// DRC engine: rule-based validation on a DesignSpec
+// ---------------------------------------------------------------------------
+
+function mkComponent(id: string, name: string, pins: string[], designator?: string): Component {
+  return { id, name, category: 'Test', quantity: 1, pins, designator }
+}
+
+function mkConnection(fromId: string, fromPin: string, toId: string, toPin: string, kind: ConnectionKind = 'signal'): Connection {
+  return { id: `${fromId}-${fromPin}-${toId}-${toPin}`, from: { componentId: fromId, pin: fromPin }, to: { componentId: toId, pin: toPin }, kind }
+}
+
+const drcSpec = {
+  title: 'DRC test',
+  summary: 'A design to exercise DRC rules.',
+  difficulty: 'beginner' as const,
+  components: [
+    mkComponent('c1', 'Microcontroller', ['VCC', 'GND', 'D13', 'D12'], 'U1'),
+    mkComponent('c2', 'LED', ['A', 'K'], 'LED1'),
+    mkComponent('c3', 'Resistor', ['1', '2'], 'R1'),
+    mkComponent('c4', 'Unconnected part', ['P1', 'P2'], 'U1') // duplicate designator with c1
+  ],
+  connections: [
+    mkConnection('c1', 'VCC', 'c2', 'A', 'power'),
+    mkConnection('c1', 'GND', 'c2', 'K', 'ground'),
+    mkConnection('c1', 'D13', 'c3', '1', 'signal'),
+    // c3 pin 2 is unconnected
+    // c4 has no connections at all (all pins unconnected)
+    // c1 has D12 unconnected
+    // c1 and c4 share designator U1
+  ],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const violations = runDrc(drcSpec)
+const summary = summarizeDrc(violations)
+
+check('DRC: finds unconnected pins', violations.some((v) => v.category === 'unconnected-pin' && v.componentId === 'c1' && v.pinName === 'D12'))
+check('DRC: finds all-unconnected component pins', violations.some((v) => v.category === 'unconnected-pin' && v.componentId === 'c4'))
+check('DRC: finds duplicate designator', violations.some((v) => v.category === 'duplicate-designator' && v.designator === 'U1'))
+check('DRC: duplicate designator produces two violations', violations.filter((v) => v.category === 'duplicate-designator').length === 2)
+check('DRC: missing footprint warning', violations.some((v) => v.category === 'missing-footprint'))
+check('DRC: summary counts', summary.errors === 6 && summary.warnings === 4, { errors: summary.errors, warnings: summary.warnings })
+check('DRC: not clean', summary.clean === false)
+
+// A clean design: every pin connected, unique designators, all have footprints.
+const cleanSpec = {
+  title: 'Clean',
+  summary: 'No violations expected.',
+  difficulty: 'beginner' as const,
+  components: [
+    { ...mkComponent('c1', 'MCU', ['VCC', 'GND']), modelFilePath: '/models/mcu.stl', designator: 'U1' },
+    { ...mkComponent('c2', 'LED', ['A', 'K']), modelFilePath: '/models/led.stl', designator: 'LED1' }
+  ],
+  connections: [
+    mkConnection('c1', 'VCC', 'c2', 'A', 'power'),
+    mkConnection('c1', 'GND', 'c2', 'K', 'ground')
+  ],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const cleanViolations = runDrc(cleanSpec)
+const cleanSummary = summarizeDrc(cleanViolations)
+check('DRC: clean design has no violations', cleanSummary.total === 0)
+check('DRC: clean design is clean', cleanSummary.clean === true)
+
+// ---------------------------------------------------------------------------
+// Design version diff
+// ---------------------------------------------------------------------------
+
+function diffVersions(s1: { title: string; components: Array<{ id: string; name: string; partName?: string; quantity: number }>; connections: Array<{ id: string }> }, s2: { title: string; components: Array<{ id: string; name: string; partName?: string; quantity: number }>; connections: Array<{ id: string }> }) {
+  const c1ById = new Map(s1.components.map((c) => [c.id, c]))
+  const c2ById = new Map(s2.components.map((c) => [c.id, c]))
+  let componentsChanged = 0
+  for (const [id, c2] of c2ById) {
+    const c1 = c1ById.get(id)
+    if (c1 && (c1.name !== c2.name || c1.partName !== c2.partName || c1.quantity !== c2.quantity)) {
+      componentsChanged++
+    }
+  }
+  return {
+    titleChanged: s1.title !== s2.title,
+    componentsAdded: Math.max(0, s2.components.length - s1.components.length),
+    componentsRemoved: Math.max(0, s1.components.length - s2.components.length),
+    componentsChanged,
+    connectionsAdded: Math.max(0, s2.connections.length - s1.connections.length),
+    connectionsRemoved: Math.max(0, s1.connections.length - s2.connections.length)
+  }
+}
+
+const v1 = {
+  title: 'Original',
+  components: [
+    { id: 'a', name: 'Resistor', partName: 'R1', quantity: 1 },
+    { id: 'b', name: 'LED', partName: 'LED1', quantity: 2 }
+  ],
+  connections: [{ id: 'w1' }, { id: 'w2' }]
+}
+const v2 = {
+  title: 'Modified',
+  components: [
+    { id: 'a', name: 'Resistor', partName: 'R2', quantity: 1 }, // changed partName
+    { id: 'b', name: 'LED', partName: 'LED1', quantity: 3 },   // changed quantity
+    { id: 'c', name: 'Capacitor', partName: 'C1', quantity: 1 } // added
+  ],
+  connections: [{ id: 'w1' }, { id: 'w2' }, { id: 'w3' }] // added one
+}
+const v3 = {
+  title: 'Original',
+  components: [
+    { id: 'a', name: 'Resistor', partName: 'R1', quantity: 1 },
+    { id: 'b', name: 'LED', partName: 'LED1', quantity: 2 }
+  ],
+  connections: [{ id: 'w1' }, { id: 'w2' }]
+}
+
+const diff12 = diffVersions(v1, v2)
+check('diff: title changed', diff12.titleChanged === true)
+check('diff: one component added', diff12.componentsAdded === 1)
+check('diff: no components removed', diff12.componentsRemoved === 0)
+check('diff: two components changed', diff12.componentsChanged === 2)
+check('diff: one connection added', diff12.connectionsAdded === 1)
+check('diff: no connections removed', diff12.connectionsRemoved === 0)
+
+const diff13 = diffVersions(v1, v3)
+check('diff: identical designs show no changes', diff13.titleChanged === false && diff13.componentsAdded === 0 && diff13.componentsRemoved === 0 && diff13.componentsChanged === 0 && diff13.connectionsAdded === 0 && diff13.connectionsRemoved === 0)
 
 // ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)

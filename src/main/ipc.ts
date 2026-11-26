@@ -7,6 +7,7 @@ import { generateImage, generateSummary } from './ai/info'
 import { loadImageDataUrl, saveImage } from './images'
 import { resolvePartImage } from './partimages'
 import { getOffers } from './offers'
+import { addToCart, clearCart, exportCart, getOrCreateCart, listCartItems, removeFromCart } from './db'
 import { countParts, getPart, lookupModel, searchParts, saveModelFilePathByUrl, savePart, staleParts } from './catalogue/db'
 import { lastSyncAt, runSync, syncStatus, fetchPart } from './sync/schematik'
 import { cadDiscoveryStatus, runCadDiscovery } from './sync/cad-discovery'
@@ -17,6 +18,7 @@ import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
 import type { AppSettings, DesignSpec, GenerateRequest, InfoRequest, Project } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
+import { runDrc, summarizeDrc } from './drc'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -109,6 +111,165 @@ export function registerIpc(): void {
 
   ipcMain.handle('projects:import', async (_e, zipPath: string) => {
     return await extractBundle(zipPath)
+  })
+
+  ipcMain.handle('cart:getOrCreate', async (_e, projectId: string) => {
+    try {
+      return { ok: true as const, data: getOrCreateCart(projectId) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('cart:add', async (_e, args: { cartId: string; componentId: string; quantity?: number; retailerUrl?: string }) => {
+    try {
+      addToCart(args.cartId, args.componentId, args.quantity ?? 1, args.retailerUrl)
+      return { ok: true as const }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('cart:remove', async (_e, args: { cartId: string; componentId: string }) => {
+    try {
+      const removed = removeFromCart(args.cartId, args.componentId)
+      return { ok: true as const, data: { removed } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('cart:list', async (_e, cartId: string) => {
+    try {
+      return { ok: true as const, data: listCartItems(cartId) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('cart:clear', async (_e, cartId: string) => {
+    try {
+      clearCart(cartId)
+      return { ok: true as const }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('cart:export', async (_e, cartId: string) => {
+    try {
+      return { ok: true as const, data: exportCart(cartId) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('design:run-drc', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      const violations = runDrc(project.spec)
+      const summary = summarizeDrc(violations)
+      return { ok: true as const, data: { violations, summary } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('design:save-version', async (_e, args: { projectId: string; label: string; prompt?: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const id = `${args.projectId}_ver_${Date.now()}`
+      const now = Date.now()
+      store.saveVersion(args.projectId, {
+        id,
+        label: args.label,
+        createdAt: now,
+        prompt: args.prompt ?? undefined,
+        spec: project.spec
+      })
+      return { ok: true as const, data: { id, createdAt: now } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('design:list-versions', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      return { ok: true as const, data: project.versions }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('design:restore-version', async (_e, args: { projectId: string; versionId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const version = project.versions.find((v) => v.id === args.versionId)
+      if (!version) return { ok: false, error: `Version not found: ${args.versionId}` }
+      const restored: Project = {
+        ...project,
+        spec: version.spec,
+        updatedAt: Date.now(),
+        versions: [...project.versions, {
+          id: `${args.projectId}_ver_restored_${Date.now()}`,
+          label: `Restored: ${version.label}`,
+          createdAt: Date.now(),
+          spec: version.spec
+        }]
+      }
+      store.save(restored)
+      return { ok: true as const, data: restored }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('design:diff-versions', async (_e, args: { projectId: string; versionId1: string; versionId2: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const v1 = project.versions.find((v) => v.id === args.versionId1)
+      const v2 = project.versions.find((v) => v.id === args.versionId2)
+      if (!v1 || !v2) return { ok: false, error: 'One or both versions not found' }
+
+      const s1 = v1.spec
+      const s2 = v2.spec
+
+      const diff: {
+        titleChanged: boolean
+        componentsAdded: number
+        componentsRemoved: number
+        componentsChanged: number
+        connectionsAdded: number
+        connectionsRemoved: number
+      } = {
+        titleChanged: s1.title !== s2.title,
+        componentsAdded: s2.components.length - s1.components.length > 0 ? s2.components.length - s1.components.length : 0,
+        componentsRemoved: s1.components.length - s2.components.length > 0 ? s1.components.length - s2.components.length : 0,
+        componentsChanged: 0,
+        connectionsAdded: s2.connections.length - s1.connections.length > 0 ? s2.connections.length - s1.connections.length : 0,
+        connectionsRemoved: s1.connections.length - s2.connections.length > 0 ? s1.connections.length - s2.connections.length : 0
+      }
+
+      // Count changed components (same id, different properties)
+      const c1ById = new Map(s1.components.map((c) => [c.id, c]))
+      const c2ById = new Map(s2.components.map((c) => [c.id, c]))
+      for (const [id, c2] of c2ById) {
+        const c1 = c1ById.get(id)
+        if (c1 && (c1.name !== c2.name || c1.partName !== c2.partName || c1.quantity !== c2.quantity)) {
+          diff.componentsChanged++
+        }
+      }
+
+      return { ok: true as const, data: { diff, v1, v2 } }
+    } catch (err) {
+      return fail(err)
+    }
   })
 
   ipcMain.handle('settings:load', async (): Promise<AppSettings> => {

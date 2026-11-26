@@ -9,6 +9,7 @@ import ProjectLibrary from './pages/ProjectLibrary'
 import SettingsDialog from './components/SettingsDialog'
 import CommandPalette from './components/CommandPalette'
 import StatusBar from './components/StatusBar'
+import CartDrawer from './components/CartDrawer'
 
 type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part'
 
@@ -32,6 +33,7 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [libraryOpen, setLibraryOpen] = useState(false)
   const [projectLibraryOpen, setProjectLibraryOpen] = useState(false)
+  const [cartOpen, setCartOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('overview')
 
@@ -168,8 +170,10 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
       <Sidebar
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenLibrary={() => setLibraryOpen(true)}
+        onOpenCart={() => setCartOpen(true)}
         onSelectProject={openProject}
         libraryOpen={libraryOpen}
+        cartOpen={cartOpen}
       />
 
       <main className="relative flex min-w-0 flex-1 flex-col">
@@ -221,6 +225,14 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
             await updateSettings(next)
             setSettingsOpen(false)
           }}
+        />
+      )}
+
+      {cartOpen && (
+        <CartDrawer
+          open={cartOpen}
+          onClose={() => setCartOpen(false)}
+          projectId={activeId}
         />
       )}
     </div>

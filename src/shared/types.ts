@@ -272,4 +272,41 @@ export interface OfferResult {
   strict: boolean
   /** The search term actually used, useful when debugging a bad lookup. */
   searchTerm: string
+  /** Unix ms when the offers were last fetched from retailer pages. Used for
+   *  staleness warnings in the UI (prices older than 7 days are flagged). */
+  fetchedAt: number
+}
+
+/** An item in the shopping cart. */
+export interface CartItem {
+  id: string
+  componentId: string
+  componentName: string
+  componentPartName: string | null
+  quantity: number
+  retailerUrl: string | null
+  addedAt: number
+  unitPrice: number | null
+  unitPriceCurrency: string
+}
+
+/** A DRC violation found during design rule checking. */
+export interface DrcViolation {
+  id: string
+  severity: 'error' | 'warning' | 'info'
+  category: string
+  message: string
+  componentId?: string
+  componentName?: string
+  pinName?: string
+  designator?: string
+}
+
+/** Summary of DRC results. */
+export interface DrcSummary {
+  total: number
+  errors: number
+  warnings: number
+  infos: number
+  clean: boolean
 }

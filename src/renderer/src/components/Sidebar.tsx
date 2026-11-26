@@ -1,19 +1,23 @@
 import { useApp } from '../state/useApp'
-import { ChipIcon, GearIcon, ListIcon, PlusIcon } from './Icons'
+import { CartIcon, ChipIcon, GearIcon, ListIcon, PlusIcon } from './Icons'
 import { relativeTime } from '../lib/format'
 
 interface SidebarProps {
   onOpenSettings: () => void
   onOpenLibrary: () => void
+  onOpenCart: () => void
   onSelectProject: (id: string | null) => void
   libraryOpen: boolean
+  cartOpen: boolean
 }
 
 export default function Sidebar({
   onOpenSettings,
   onOpenLibrary,
+  onOpenCart,
   onSelectProject,
-  libraryOpen
+  libraryOpen,
+  cartOpen
 }: SidebarProps) {
   const { projects, activeId } = useApp()
 
@@ -52,6 +56,15 @@ export default function Sidebar({
           >
             <ListIcon size={16} />
             <span className="text-sm font-medium">Part library</span>
+          </button>
+          <button
+            onClick={onOpenCart}
+            className={`flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left transition ${
+              cartOpen ? 'bg-surface-2 text-ink' : 'text-ink-dim hover:bg-surface-1 hover:text-ink'
+            }`}
+          >
+            <CartIcon size={16} />
+            <span className="text-sm font-medium">Cart</span>
           </button>
         </div>
 

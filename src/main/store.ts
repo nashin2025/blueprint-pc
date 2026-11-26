@@ -1,4 +1,4 @@
-import type { Project } from '@shared/types'
+import type { DesignVersion, Project } from '@shared/types'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -11,7 +11,8 @@ import {
   archiveProject as dbArchiveProject,
   purgeProject as dbPurgeProject,
   dataFilePath as dbDataFilePath,
-  migrateFromJson as dbMigrateFromJson
+  migrateFromJson as dbMigrateFromJson,
+  saveProjectVersion as dbSaveProjectVersion
 } from './db'
 import { imagesDir } from './images'
 import { modelsDir } from './sync/model-downloader'
@@ -140,6 +141,12 @@ export const store = {
   /** Absolute path of the data file, for the "show data folder" action. */
   dataFilePath(): string {
     return dbDataFilePath()
+  },
+
+  /** Save a design version snapshot for a project. */
+  saveVersion(projectId: string, version: DesignVersion): void {
+    ensureMigrated()
+    dbSaveProjectVersion(projectId, version)
   }
 }
 

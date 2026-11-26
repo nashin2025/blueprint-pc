@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { CartItem, DrcViolation } from '@shared/types'
 import type {
   AppSettings,
   CadDiscoveryProgress,
   CataloguePart,
   CatalogueSummary,
   DesignSpec,
+  DesignVersion,
   GenerateRequest,
   InfoRequest,
   IpcResult,
@@ -109,7 +111,35 @@ const api = {
 
   showDataFolder: (): Promise<boolean> => ipcRenderer.invoke('app:showDataFolder'),
   openFilePicker: (): Promise<{ canceled: boolean; filePath?: string }> =>
-    ipcRenderer.invoke('app:openFilePicker')
+    ipcRenderer.invoke('app:openFilePicker'),
+
+  // Cart
+  cartGetOrCreate: (projectId: string): Promise<IpcResult<{ id: string; createdAt: number; updatedAt: number }>> =>
+    ipcRenderer.invoke('cart:getOrCreate', projectId),
+  cartAdd: (args: { cartId: string; componentId: string; quantity?: number; retailerUrl?: string }): Promise<IpcResult<void>> =>
+    ipcRenderer.invoke('cart:add', args),
+  cartRemove: (args: { cartId: string; componentId: string }): Promise<IpcResult<{ removed: boolean }>> =>
+    ipcRenderer.invoke('cart:remove', args),
+  cartList: (cartId: string): Promise<IpcResult<CartItem[]>> =>
+    ipcRenderer.invoke('cart:list', cartId),
+  cartClear: (cartId: string): Promise<IpcResult<void>> =>
+    ipcRenderer.invoke('cart:clear', cartId),
+  cartExport: (cartId: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke('cart:export', cartId),
+
+  // DRC
+  designRunDrc: (projectId: string): Promise<IpcResult<{ violations: DrcViolation[]; summary: { total: number; errors: number; warnings: number; infos: number; clean: boolean } }>> =>
+    ipcRenderer.invoke('design:run-drc', projectId),
+
+  // Design versions
+  designSaveVersion: (args: { projectId: string; label: string; prompt?: string }): Promise<IpcResult<{ id: string; createdAt: number }>> =>
+    ipcRenderer.invoke('design:save-version', args),
+  designListVersions: (projectId: string): Promise<IpcResult<DesignVersion[]>> =>
+    ipcRenderer.invoke('design:list-versions', projectId),
+  designRestoreVersion: (args: { projectId: string; versionId: string }): Promise<IpcResult<Project>> =>
+    ipcRenderer.invoke('design:restore-version', args),
+  designDiffVersions: (args: { projectId: string; versionId1: string; versionId2: string }): Promise<IpcResult<{ diff: any; v1: DesignVersion; v2: DesignVersion }>> =>
+    ipcRenderer.invoke('design:diff-versions', args)
 }
 
 export type Bridge = typeof api
