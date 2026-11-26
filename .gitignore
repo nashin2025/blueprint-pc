@@ -9,3 +9,8 @@ release/
 data/
 settings.json
 projects.json
+
+# Playwright test artifacts
+playwright-report/
+test-results/
+trace/
