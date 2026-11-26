@@ -153,7 +153,11 @@ interface SourcePart {
  * what lets us sort and compare. Parsing lives in schematik-parse.ts so the
  * self-check can cover it without a network or a database.
  */
-async function fetchPart(slug: string): Promise<PartRecord | null> {
+/**
+ * Fetch one part from the Schematik MCP and normalise it to our row shape.
+ * Exported so the on-demand refresh IPC handler can call it for a single part.
+ */
+export async function fetchPart(slug: string): Promise<PartRecord | null> {
   await ensureSession()
   const res = await rpc('tools/call', { name: 'get_part', arguments: { slug } })
   const content = (res?.result as { content?: { text?: string }[] } | undefined)?.content
@@ -284,4 +288,10 @@ export async function runSync(batch = DEFAULT_BATCH): Promise<SyncProgress> {
 export function lastSyncAt(): number | null {
   const raw = getState('last_sync_at')
   return raw ? Number(raw) : null
+}
+
+/** Returns true when a part's cached data is older than maxAgeDays. */
+export function isStale(fetchedAt: number, maxAgeDays: number): boolean {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
+  return fetchedAt < cutoff
 }

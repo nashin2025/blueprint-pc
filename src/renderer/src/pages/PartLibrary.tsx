@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CataloguePart, CatalogueSummary, SyncProgress } from '@shared/types'
-import { ChipIcon, SparkIcon } from '../components/Icons'
+import { ChipIcon, RefreshIcon, SparkIcon } from '../components/Icons'
 import PinoutView from '../components/PinoutView'
 import { relativeTime } from '../lib/format'
 
@@ -178,6 +178,21 @@ export default function PartLibrary({ onBack }: { onBack: () => void }) {
 
   const trayParts = recentlyViewed.filter((p) => tray.includes(p.slug))
 
+  // How old a part's cached data must be before it is flagged stale (7 days).
+  const STALE_DAYS = 7
+
+  function stalenessLabel(fetchedAt: number): string {
+    const days = Math.round((Date.now() - fetchedAt) / 86400000)
+    if (days <= 0) return 'just now'
+    if (days === 1) return '1 day ago'
+    if (days <= STALE_DAYS) return `${days} days ago`
+    return `stale (${days} days)`
+  }
+
+  function isStale(fetchedAt: number): boolean {
+    return (Date.now() - fetchedAt) / 86400000 > STALE_DAYS
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-surface-0">
       {/* Header */}
@@ -281,31 +296,55 @@ export default function PartLibrary({ onBack }: { onBack: () => void }) {
               </p>
             ) : (
               <ul className="space-y-0.5">
-                {filteredResults.map((r) => (
-                  <li key={r.slug}>
-                    <button
-                      onClick={() => {
-                        setSelectedSlug(r.slug)
-                        addToTray(r.slug)
-                      }}
-                      className={`flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition ${
-                        selectedSlug === r.slug ? 'bg-surface-2' : 'hover:bg-surface-1'
-                      }`}
-                    >
-                      <span className="flex items-baseline justify-between gap-2">
-                        <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{r.name}</span>
-                        {r.priceText && (
-                          <span className="shrink-0 font-mono text-[11px] text-ink-dim">
-                            {r.priceText}
+                {filteredResults.map((r) => {
+                  const stale = isStale(r.fetchedAt)
+                  return (
+                    <li key={r.slug}>
+                      <button
+                        onClick={() => {
+                          setSelectedSlug(r.slug)
+                          addToTray(r.slug)
+                        }}
+                        className={`flex w-full flex-col gap-0.5 rounded-lg px-2.5 py-2 text-left transition ${
+                          selectedSlug === r.slug ? 'bg-surface-2' : 'hover:bg-surface-1'
+                        }`}
+                      >
+                        <span className="flex items-baseline justify-between gap-2">
+                          <span className="min-w-0 flex-1 truncate text-[13px] text-ink">{r.name}</span>
+                          {r.priceText && (
+                            <span className="shrink-0 font-mono text-[11px] text-ink-dim">
+                              {r.priceText}
+                            </span>
+                          )}
+                        </span>
+                        <span className="truncate text-[11px] text-ink-faint">
+                          {[r.brand, r.category, `${r.pinCount} pins`].filter(Boolean).join(' · ')}
+                        </span>
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span
+                            className={`text-[9px] px-1.5 py-0.5 rounded ${
+                              stale
+                                ? 'bg-danger/10 text-danger border border-danger/30'
+                                : 'bg-ok/10 text-ok border border-ok/30'
+                            }`}
+                          >
+                            {stalenessLabel(r.fetchedAt)}
                           </span>
-                        )}
-                      </span>
-                      <span className="truncate text-[11px] text-ink-faint">
-                        {[r.brand, r.category, `${r.pinCount} pins`].filter(Boolean).join(' · ')}
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              void window.api.catalogue.refreshPart(r.slug)
+                            }}
+                            className="rounded p-1 text-ink-faint transition hover:bg-surface-3 hover:text-accent"
+                            title="Refresh from Schematik"
+                          >
+                            <RefreshIcon size={12} />
+                          </button>
+                        </div>
+                      </button>
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>

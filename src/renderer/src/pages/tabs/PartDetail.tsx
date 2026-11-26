@@ -63,7 +63,9 @@ export default function PartDetail({
   // Pull the matching entry from the local part library, if one exists. The
   // library is optional (it is populated by an explicit import), so a miss here
   // is silent: the detail view simply omits the section.
-  const kit = useCatalogueMatch(component.partName ?? component.name)
+  const [catalogueRefreshKey, setCatalogueRefreshKey] = useState(0)
+  const [kitRefreshing, setKitRefreshing] = useState(false)
+  const kit = useCatalogueMatch(component.partName ?? component.name, catalogueRefreshKey)
 
   return (
     <div className="mx-auto w-full max-w-4xl px-6 py-6">
@@ -202,6 +204,32 @@ export default function PartDetail({
                 <PinoutView pins={kit.pinout} label={kit.partNumber ?? kit.name} />
               </div>
             )}
+            <div className="mt-3 flex items-center gap-2">
+              <span className="text-[10px] text-ink-faint">
+                Library data {kit.fetchedAt ? `updated ${Math.round((Date.now() - kit.fetchedAt) / 86400000)} day${Math.round((Date.now() - kit.fetchedAt) / 86400000) === 1 ? '' : 's'} ago` : 'never'}
+              </span>
+              <button
+                onClick={async () => {
+                  setKitRefreshing(true)
+                  const res = await window.api.catalogue.refreshPart(kit.slug)
+                  setKitRefreshing(false)
+                  if (res.ok && res.data) {
+                    setCatalogueRefreshKey((k) => k + 1)
+                  }
+                }}
+                className="rounded p-1.5 text-[10px] text-ink-dim transition hover:bg-surface-3 hover:text-accent"
+                title="Refresh from Schematik"
+                disabled={kitRefreshing}
+              >
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M23 4v3a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V1a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v3" />
+                  <path d="M1 20v-3a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3" />
+                </svg>
+              </button>
+              {kitRefreshing && (
+                <span className="inline-block size-3 animate-spin-slow rounded-full border-2 border-line border-t-accent" />
+              )}
+            </div>
             <p className="mt-3 text-[10.5px] text-ink-faint">
               Mirrored from the public Schematik catalogue; may be incomplete or out of date.
             </p>
@@ -306,8 +334,10 @@ function Section({ title, children }: { title: string; children: React.ReactNode
  * The library is a separate, opt-in mirror, so a miss is the common case and is
  * handled silently. When it does hold the part, we show its description and
  * pinout - richer than anything the model supplied.
+ *
+ * `refreshKey` forces a re-fetch when changed (used by the manual refresh button).
  */
-function useCatalogueMatch(name: string): CataloguePart | null {
+function useCatalogueMatch(name: string, refreshKey?: number): CataloguePart | null {
   const [match, setMatch] = useState<CataloguePart | null>(null)
 
   useEffect(() => {
@@ -324,7 +354,7 @@ function useCatalogueMatch(name: string): CataloguePart | null {
     return () => {
       cancelled = true
     }
-  }, [name])
+  }, [name, refreshKey])
 
   return match
 }

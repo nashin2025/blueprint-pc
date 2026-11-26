@@ -462,6 +462,22 @@ check(
 )
 
 // ---------------------------------------------------------------------------
+// Schematik staleness logic (inlined to avoid module resolution issues)
+// ---------------------------------------------------------------------------
+const now = Date.now()
+const dayMs = 24 * 60 * 60 * 1000
+function isStaleInline(fetchedAt: number, maxAgeDays: number): boolean {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
+  return fetchedAt < cutoff
+}
+
+check('isStale: freshly fetched is not stale', !isStaleInline(now, 7))
+check('isStale: 6 days 23 hours is not stale', !isStaleInline(now - 6 * dayMs - 23 * 60 * 60 * 1000, 7))
+check('isStale: 7 days + 1 ms is stale', isStaleInline(now - 7 * dayMs - 1, 7))
+check('isStale: 30 days is stale', isStaleInline(now - 30 * dayMs, 7))
+check('isStale: 1 day with 30 day threshold is not stale', !isStaleInline(now - dayMs, 30))
+
+// ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)
 if (failures > 0) {
   console.error(`${failures} FAILED`)

@@ -7,8 +7,8 @@ import { generateImage, generateSummary } from './ai/info'
 import { loadImageDataUrl, saveImage } from './images'
 import { resolvePartImage } from './partimages'
 import { getOffers } from './offers'
-import { countParts, getPart, lookupModel, searchParts, saveModelFilePathByUrl } from './catalogue/db'
-import { lastSyncAt, runSync, syncStatus } from './sync/schematik'
+import { countParts, getPart, lookupModel, searchParts, saveModelFilePathByUrl, savePart, staleParts } from './catalogue/db'
+import { lastSyncAt, runSync, syncStatus, fetchPart } from './sync/schematik'
 import { cadDiscoveryStatus, runCadDiscovery } from './sync/cad-discovery'
 import { modelDownloadStatus, runModelDownload, downloadModelFile } from './sync/model-downloader'
 import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
@@ -216,6 +216,25 @@ export function registerIpc(): void {
       // The sync is slow by design; it does not block startup.
       const progress = await runSync(batch)
       return { ok: true as const, data: progress }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('catalogue:refresh-part', async (_e, slug: string) => {
+    try {
+      const part = await fetchPart(slug)
+      if (!part) return { ok: false, error: `Part not found in Schematik: ${slug}` }
+      savePart(part)
+      return { ok: true as const, data: { slug: part.slug, name: part.name, fetchedAt: part.fetchedAt } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('catalogue:stale-parts', async (_e, maxAgeDays: number) => {
+    try {
+      return { ok: true as const, data: staleParts(maxAgeDays) }
     } catch (err) {
       return fail(err)
     }
