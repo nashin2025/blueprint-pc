@@ -1,0 +1,248 @@
+@import 'tailwindcss';
+
+@theme {
+  /* Surfaces. Near-black shell, colour reads as signal not decoration. */
+  --color-void: #050507;
+  --color-surface-0: #0a0a0d;
+  --color-surface-1: #101014;
+  --color-surface-2: #18181e;
+  --color-surface-3: #202028;
+  --color-line: #262631;
+  --color-line-bright: #323240;
+
+  /* Type */
+  --color-ink: #e8e8ea;
+  --color-ink-dim: #9494a0;
+  --color-ink-faint: #5c5c6a;
+
+  /* Signal colours. Single accent used sparingly. */
+  --color-accent: #4f8cff;
+  --color-accent-soft: rgba(79, 140, 255, 0.12);
+  --color-wire-power: #e0b34a;
+  --color-wire-ground: #8b8b9a;
+  --color-wire-signal: #4f8cff;
+  --color-wire-data: #46c79a;
+  --color-danger: #e5544b;
+  --color-warn: #e0a34a;
+  --color-ok: #46c79a;
+
+  /* Typography */
+  --font-sans:
+    'Inter', 'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono:
+    ui-monospace, 'Cascadia Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  --radius-sm: 6px;
+  --radius-card: 10px;
+  --radius-button: 8px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-surface-0);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow: hidden;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-accent) 30%, transparent);
+  }
+
+  /* Slim scrollbars */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-surface-3);
+    border-radius: 999px;
+    border: 3px solid var(--color-surface-0);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-line-bright);
+  }
+}
+
+@utility card {
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-card);
+}
+
+@utility bg-blueprint-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@utility animate-fade-up {
+  animation: fade-up 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@utility animate-spin-slow {
+  animation: spin-slow 800ms linear infinite;
+}
+
+/* Component styles using plain CSS (Tailwind @utility doesn't support pseudo-selectors) */
+.btn-primary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white transition;
+  background: var(--color-accent);
+  border: none;
+  outline: none;
+  cursor: pointer;
+}
+.btn-primary:hover {
+  opacity: 0.92;
+  filter: brightness(1.05);
+}
+.btn-primary:active {
+  opacity: 0.85;
+}
+.btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: none;
+}
+
+.btn-secondary {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-ink transition;
+  background: var(--color-surface-2);
+  border: 1px solid var(--color-line);
+  outline: none;
+  cursor: pointer;
+}
+.btn-secondary:hover {
+  border-color: var(--color-line-bright);
+  background: var(--color-surface-3);
+}
+.btn-secondary:active {
+  background: var(--color-surface-3);
+}
+.btn-secondary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  @apply inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm text-ink-dim transition;
+  background: transparent;
+  border: 1px solid transparent;
+  outline: none;
+  cursor: pointer;
+}
+.btn-ghost:hover {
+  background: var(--color-surface-2);
+  color: var(--color-ink);
+  border-color: var(--color-line-bright);
+}
+.btn-ghost:active {
+  background: var(--color-surface-3);
+}
+.btn-ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.input-field {
+  @apply w-full rounded-lg bg-surface-0 border border-line px-3 py-2 text-sm text-ink outline-none transition;
+}
+.input-field:focus {
+  border-color: var(--color-accent);
+}
+.input-field::placeholder {
+  color: var(--color-ink-faint);
+}
+.input-field:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.textarea-field {
+  @apply w-full rounded-lg bg-surface-0 border border-line p-3 text-sm text-ink outline-none resize-none transition;
+}
+.textarea-field:focus {
+  border-color: var(--color-accent);
+}
+.textarea-field::placeholder {
+  color: var(--color-ink-faint);
+}
+.textarea-field:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.label {
+  @apply block text-xs font-semibold uppercase tracking-wider text-ink-faint mb-1;
+}
+
+.badge {
+  @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider leading-1;
+}
+
+.section-heading {
+  @apply text-xs font-semibold uppercase tracking-wider text-ink-faint mb-3;
+}
+
+.h1-premium {
+  @apply text-3xl font-semibold leading-[1.1] tracking-tight text-ink;
+}
+
+.h2-premium {
+  @apply text-xl font-semibold leading-[1.25] tracking-tight text-ink;
+}
+
+.text-body {
+  @apply text-sm leading-relaxed text-ink-dim;
+}
+
+.text-muted {
+  @apply text-sm text-ink-faint;
+}
+
+.text-caption {
+  @apply text-[10px] font-semibold uppercase tracking-wider text-ink-faint;
+}
+
+.tab-active {
+  @apply relative;
+}
+.tab-active::after {
+  content: '';
+  @apply absolute bottom-[-1px] left-1/2 -translate-x-1/2 w-[60%] h-[0.5px] rounded-full bg-accent;
+}

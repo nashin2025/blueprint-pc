@@ -1,0 +1,59 @@
+{
+  "name": "blueprint-pc",
+  "version": "0.1.0",
+  "description": "Local AI hardware design studio - prompt to parts, wiring, and assembly steps",
+  "main": "./out/main/index.js",
+  "author": "personal",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "check": "node --experimental-strip-types scripts/selfcheck.ts",
+    "package": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "local.blueprintpc",
+    "productName": "Blueprint PC",
+    "directories": {
+      "output": "release"
+    },
+    "npmRebuild": false,
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "dir"
+      ]
+    }
+  },
+  "dependencies": {
+    "@types/three": "^0.187.0",
+    "better-sqlite3": "^13.2.0",
+    "playwright": "^1.65.1",
+    "three": "^0.187.0",
+    "unzipper": "^0.12.5",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "40.10.2",
+    "electron-builder": "^26.18.0",
+    "electron-vite": "^3.1.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.0"
+  }
+}

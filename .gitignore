@@ -1,0 +1,11 @@
+node_modules/
+out/
+release/
+*.tsbuildinfo
+*.log
+.DS_Store
+
+# Local model keys and generated projects never belong in a repo
+data/
+settings.json
+projects.json
