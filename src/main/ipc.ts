@@ -1,4 +1,4 @@
-import { ipcMain, shell } from 'electron'
+import { dialog, ipcMain, shell } from 'electron'
 import { store } from './store'
 import { loadSettings, saveSettings } from './settings'
 import { requestDesign, LlmError, listNvidiaModels } from './ai/llm'
@@ -131,6 +131,18 @@ export function registerIpc(): void {
   ipcMain.handle('app:showDataFolder', async () => {
     await shell.showItemInFolder(store.dataFilePath())
     return true
+  })
+
+  ipcMain.handle('app:openFilePicker', async () => {
+    const result = await dialog.showOpenDialog({
+      title: 'Import .bpzip project bundle',
+      filters: [{ name: 'Blueprint PC Project', extensions: ['bpzip'] }],
+      properties: ['openFile']
+    })
+    if (result.canceled || result.filePaths.length === 0) {
+      return { canceled: true }
+    }
+    return { canceled: false, filePath: result.filePaths[0] }
   })
 
   ipcMain.handle('design:generate', async (_e, req: GenerateRequest) => {

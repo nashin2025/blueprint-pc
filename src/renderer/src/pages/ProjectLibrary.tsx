@@ -9,6 +9,7 @@ import {
   EditIcon,
   ExportIcon,
   FolderOpenIcon,
+  ImportIcon,
   PlusIcon,
   TrashIcon
 } from '../components/Icons'
@@ -22,8 +23,10 @@ export default function ProjectLibrary({ onBack, onOpenProject }: ProjectLibrary
   const [archivedVisible, setArchivedVisible] = useState(false)
   const [renameId, setRenameId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [deleteId, setDeleteId] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState<{ id: string; progress: number } | null>(null)
+  const [deleteId, setDeleteId] = useState<string | null>(null)
 
   // Re-fetch projects from IPC to get fresh data after mutations
   const [projects, setProjects] = useState<Project[]>([])
@@ -72,9 +75,33 @@ export default function ProjectLibrary({ onBack, onOpenProject }: ProjectLibrary
     if (!proj) return
     const safeTitle = proj.spec.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()
     const outputPath = `data/exports/${safeTitle}_${Date.now()}.bpzip`
-    await window.api.exportProject({ id, outputPath })
-    // Open the data folder so the user can find the file
-    await window.api.showDataFolder()
+    setExporting({ id, progress: 0 })
+    try {
+      await window.api.exportProject({ id, outputPath })
+      setExporting(null)
+      // Open the data folder so the user can find the file
+      await window.api.showDataFolder()
+    } catch (err) {
+      setExporting(null)
+      console.error('Export failed:', err)
+    }
+  }
+
+  async function handleImport() {
+    setImporting(true)
+    try {
+      const picked = await window.api.openFilePicker()
+      if (picked.canceled || !picked.filePath) {
+        setImporting(false)
+        return
+      }
+      await window.api.importProject(picked.filePath)
+      setRefreshKey((k) => k + 1)
+    } catch (err) {
+      console.error('Import failed:', err)
+    } finally {
+      setImporting(false)
+    }
   }
 
   return (
@@ -106,14 +133,36 @@ export default function ProjectLibrary({ onBack, onOpenProject }: ProjectLibrary
             Show archived
           </label>
           <button
-            onClick={() => window.api.showDataFolder()}
+            onClick={handleImport}
+            disabled={importing}
             className="btn-secondary"
+          >
+            <ImportIcon size={14} />
+            {importing ? 'Importing…' : 'Import .bpzip'}
+          </button>
+          <button
+            onClick={() => window.api.showDataFolder()}
+            className="btn-ghost hover:bg-surface-1"
           >
             <FolderOpenIcon size={14} />
             Data folder
           </button>
         </div>
       </header>
+
+      {importing && (
+        <div className="border-b border-line bg-surface-1 px-6 py-2 text-[12px] text-ink-dim flex items-center justify-between">
+          <span>Importing project…</span>
+          <span className="inline-block size-3 animate-spin-slow rounded-full border-2 border-line border-t-accent" />
+        </div>
+      )}
+
+      {exporting && (
+        <div className="border-b border-line bg-surface-1 px-6 py-2 text-[12px] text-ink-dim flex items-center justify-between">
+          <span>Exporting {exporting.progress}%…</span>
+          <span className="inline-block size-3 animate-spin-slow rounded-full border-2 border-line border-t-accent" />
+        </div>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto p-6">
         {projects.length === 0 ? (

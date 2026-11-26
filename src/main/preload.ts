@@ -107,7 +107,9 @@ const api = {
     }
   },
 
-  showDataFolder: (): Promise<boolean> => ipcRenderer.invoke('app:showDataFolder')
+  showDataFolder: (): Promise<boolean> => ipcRenderer.invoke('app:showDataFolder'),
+  openFilePicker: (): Promise<{ canceled: boolean; filePath?: string }> =>
+    ipcRenderer.invoke('app:openFilePicker')
 }
 
 export type Bridge = typeof api
