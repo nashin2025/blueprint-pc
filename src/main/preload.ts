@@ -75,6 +75,10 @@ const api = {
       ipcRenderer.invoke('catalogue:get', slug),
     sync: (batch?: number): Promise<IpcResult<SyncProgress>> =>
       ipcRenderer.invoke('catalogue:sync', batch),
+    refreshPart: (slug: string): Promise<IpcResult<{ slug: string; name: string; fetchedAt: number }>> =>
+      ipcRenderer.invoke('catalogue:refresh-part', slug),
+    staleParts: (maxAgeDays: number): Promise<IpcResult<Array<{ slug: string; name: string; fetchedAt: number }>>> =>
+      ipcRenderer.invoke('catalogue:stale-parts', maxAgeDays),
     findModelUrl: (args: { productUrl: string; partName?: string }): Promise<IpcResult<string | null>> =>
       ipcRenderer.invoke('catalogue:find-model-url', args),
     cadDiscoveryStatus: (): Promise<IpcResult<CadDiscoveryProgress>> =>

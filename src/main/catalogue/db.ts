@@ -271,7 +271,8 @@ export function searchParts(query: string, limit = 20): PartSummary[] {
     .prepare(
       `SELECT p.slug, p.name, p.brand, p.category, p.price_text,
               (p.description IS NOT NULL) AS has_description,
-              (SELECT COUNT(*) FROM pins WHERE part_slug = p.slug) AS pin_count
+              (SELECT COUNT(*) FROM pins WHERE part_slug = p.slug) AS pin_count,
+              p.fetched_at
        FROM parts p
        WHERE ${clauses.join(' AND ')}
        ORDER BY
@@ -287,6 +288,7 @@ export function searchParts(query: string, limit = 20): PartSummary[] {
     price_text: string | null
     has_description: number
     pin_count: number
+    fetched_at: number
   }[]
 
   // SQLite returns snake_case column names; map them to the camelCase shape
@@ -298,7 +300,8 @@ export function searchParts(query: string, limit = 20): PartSummary[] {
     category: r.category,
     priceText: r.price_text,
     hasDescription: r.has_description === 1,
-    pinCount: r.pin_count
+    pinCount: r.pin_count,
+    fetchedAt: r.fetched_at
   }))
 }
 
@@ -320,6 +323,15 @@ export function lastmods(): Map<string, string | null> {
     lastmod: string | null
   }[]
   return new Map(rows.map((r) => [r.slug, r.lastmod]))
+}
+
+/** Parts whose cached data is older than `maxAgeDays`, for staleness UI. */
+export function staleParts(maxAgeDays: number): Array<{ slug: string; name: string; fetchedAt: number }> {
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000
+  const rows = database()
+    .prepare('SELECT slug, name, fetched_at FROM parts WHERE fetched_at < ? ORDER BY fetched_at ASC')
+    .all(cutoff) as { slug: string; name: string; fetched_at: number }[]
+  return rows.map((r) => ({ slug: r.slug, name: r.name, fetchedAt: r.fetched_at }))
 }
 
 export function recordGroups(mapping: { slug: string; group: string }[]): number {

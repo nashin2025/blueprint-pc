@@ -188,6 +188,8 @@ export interface CatalogueSummary {
   priceText: string | null
   hasDescription: boolean
   pinCount: number
+  /** When this part was last fetched from Schematik, for staleness UI. */
+  fetchedAt: number
 }
 
 export interface SyncProgress {

@@ -162,3 +162,12 @@ export function ImportIcon({ size = 16, className }: IconProps) {
     </svg>
   )
 }
+
+export function RefreshIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <path d="M21 4v3a1 1 0 0 1-1 1H8a1 1 0 0 1-1-1V1a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v3" />
+      <path d="M1 20v-3a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1h3" />
+    </svg>
+  )
+}
