@@ -1,0 +1,630 @@
+/**
+ * PCB layout feasibility spike — Blueprint PC.
+ *
+ * Pure TypeScript, zero imports, zero Node modules. Runs in a Web Worker or
+ * the renderer main thread. Computes component placement, Manhattan trace
+ * routing, and design-rule checks; emits Three.js-ready geometry descriptions
+ * (the renderer imports Three.js separately).
+ *
+ * This is a feasibility spike: it proves the core algorithms work on small
+ * boards. It is NOT fabrication-grade — no rip-up/reroute, no pours, no
+ * differential pairs, no Gerber export.
+ */
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export type PcbUnit = 'mm' | 'mil';
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface PcbPad {
+  componentId: string;
+  pinName: string;
+  center: Point;
+  w: number;
+  h: number;
+}
+
+export interface PcbPlacement {
+  componentId: string;
+  name: string;
+  center: Point;
+  w: number;
+  h: number;
+  rotationDeg: number;
+  pads: PcbPad[];
+}
+
+export interface PcbTrace {
+  net: string;
+  from: { componentId: string; pinName: string };
+  to: { componentId: string; pinName: string };
+  points: Point[]; // ordered polyline from from-pad to to-pad
+}
+
+export interface PcbVia {
+  x: number;
+  y: number;
+  drill: number;
+}
+
+export interface PcbDesignRules {
+  traceWidth: number;
+  traceClearance: number;
+  padToTraceClearance: number;
+  viaToTraceClearance: number;
+  minAnnularRing: number;
+}
+
+export interface PcbDrcViolation {
+  id: string;
+  severity: 'error' | 'warning';
+  category: 'trace-to-trace' | 'trace-to-pad' | 'trace-to-via' | 'unroutable' | 'placement-overlap';
+  message: string;
+  net?: string;
+  location?: Point;
+}
+
+export interface PcbDrcSummary {
+  total: number;
+  errors: number;
+  warnings: number;
+  clean: boolean;
+}
+
+export interface PcbLayoutResult {
+  placements: PcbPlacement[];
+  traces: PcbTrace[];
+  vias: PcbVia[];
+  drc: PcbDrcSummary;
+  violations: PcbDrcViolation[];
+  unrouted: Array<{ net: string; reason: string }>;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry primitives
+// ---------------------------------------------------------------------------
+
+/** Axis-aligned bounding box. */
+export interface Aabb {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/** Build AABB from a centered, rotated rectangle. */
+export function aabbFromRect(cx: number, cy: number, w: number, h: number, rotationDeg: number): Aabb {
+  const rad = (rotationDeg * Math.PI) / 180;
+  const c = Math.cos(rad);
+  const s = Math.sin(rad);
+  const corners = [
+    { x: cx - w / 2, y: cy - h / 2 },
+    { x: cx + w / 2, y: cy - h / 2 },
+    { x: cx + w / 2, y: cy + h / 2 },
+    { x: cx - w / 2, y: cy + h / 2 },
+  ];
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (const p of corners) {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    const rx = c * dx - s * dy + cx;
+    const ry = s * dx + c * dy + cy;
+    if (rx < minX) minX = rx;
+    if (ry < minY) minY = ry;
+    if (rx > maxX) maxX = rx;
+    if (ry > maxY) maxY = ry;
+  }
+  return { minX, minY, maxX, maxY };
+}
+
+export function aabbOverlap(a: Aabb, b: Aabb): boolean {
+  return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
+}
+
+/** Minimum distance from point p to segment ab. */
+function pointToSegmentDist(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+  const abx = bx - ax;
+  const aby = by - ay;
+  const apx = px - ax;
+  const apy = py - ay;
+  const len2 = abx * abx + aby * aby;
+  if (len2 === 0) {
+    return Math.hypot(apx, apy);
+  }
+  let t = (apx * abx + apy * aby) / len2;
+  t = Math.max(0, Math.min(1, t));
+  const closestX = ax + t * abx;
+  const closestY = ay + t * aby;
+  return Math.hypot(px - closestX, py - closestY);
+}
+
+/** Minimum distance between two segments. Approximation: min of endpoint-to-segment
+ * distances plus the perpendicular crossing test. Good enough for DRC. */
+function segmentToSegmentDist(ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number): number {
+  const d1 = pointToSegmentDist(cx, cy, ax, ay, bx, by);
+  const d2 = pointToSegmentDist(dx, dy, ax, ay, bx, by);
+  const d3 = pointToSegmentDist(ax, ay, cx, cy, dx, dy);
+  const d4 = pointToSegmentDist(bx, by, cx, cy, dx, dy);
+  return Math.min(d1, d2, d3, d4);
+}
+
+/** Segment-to-rectangle minimum distance. */
+function segmentToRectDist(ax: number, ay: number, bx: number, by: number, rect: Aabb): number {
+  // If either endpoint is inside, distance is 0.
+  if (ax >= rect.minX && ax <= rect.maxX && ay >= rect.minY && ay <= rect.maxY) return 0;
+  if (bx >= rect.minX && bx <= rect.maxX && by >= rect.minY && by <= rect.maxY) return 0;
+  // Distance to each edge.
+  const edges: [number, number, number, number][] = [
+    [rect.minX, rect.minY, rect.maxX, rect.minY], // top
+    [rect.maxX, rect.minY, rect.maxX, rect.maxY], // right
+    [rect.maxX, rect.maxY, rect.minX, rect.maxY], // bottom
+    [rect.minX, rect.maxY, rect.minX, rect.minY], // left
+  ];
+  let min = Infinity;
+  for (const [ex1, ey1, ex2, ey2] of edges) {
+    const d = segmentToSegmentDist(ax, ay, bx, by, ex1, ey1, ex2, ey2);
+    if (d < min) min = d;
+  }
+  return min;
+}
+
+// ---------------------------------------------------------------------------
+// Placement
+// ---------------------------------------------------------------------------
+
+const DEFAULT_PAD_W = 2.0;
+const DEFAULT_PAD_H = 2.0;
+
+/** Build pads for a component: two rows (top/bottom) split across sides. */
+function buildPads(componentId: string, pinNames: string[], center: Point, w: number, h: number, rotationDeg: number): PcbPad[] {
+  const pads: PcbPad[] = [];
+  const n = pinNames.length;
+  const perSide = Math.ceil(n / 2);
+  const left = pinNames.slice(0, perSide);
+  const right = pinNames.slice(perSide);
+  const halfW = w / 2;
+  const halfH = h / 2;
+
+  const addPad = (pinName: string, lx: number, ly: number) => {
+    // Rotate local coords into world coords.
+    const rad = (rotationDeg * Math.PI) / 180;
+    const c = Math.cos(rad);
+    const s = Math.sin(rad);
+    pads.push({
+      componentId,
+      pinName,
+      center: { x: center.x + c * lx - s * ly, y: center.y + s * lx + c * ly },
+      w: DEFAULT_PAD_W,
+      h: DEFAULT_PAD_H,
+    });
+  };
+
+  let i = 0;
+  for (const pin of left) {
+    const t = i / Math.max(perSide - 1, 1);
+    const ly = -halfH + t * h; // top to bottom
+    addPad(pin, -halfW, ly);
+    i++;
+  }
+  i = 0;
+  for (const pin of right) {
+    const t = i / Math.max(perSide - 1, 1);
+    const ly = -halfH + t * h;
+    addPad(pin, halfW, ly);
+    i++;
+  }
+  return pads;
+}
+
+/** Greedy placement: first component at board center, rest in rows avoiding overlap. */
+export function placeComponents(
+  componentIds: string[],
+  names: Record<string, string>,
+  boardW: number,
+  boardH: number,
+  defaultW = 20,
+  defaultH = 15
+): { placements: PcbPlacement[]; overlaps: Array<{ a: string; b: string }> } {
+  const placements: PcbPlacement[] = [];
+  const overlaps: Array<{ a: string; b: string }> = [];
+
+  const margin = 8;
+  const stepX = defaultW + 6;
+
+  let placedX = margin;
+  let placedY = margin;
+  let rowMaxH = 0;
+
+  for (let i = 0; i < componentIds.length; i++) {
+    const id = componentIds[i];
+    const w = defaultW;
+    const h = defaultH;
+
+    // Try current position; if it would exceed board width, wrap to next row.
+    if (placedX + w / 2 + margin > boardW) {
+      placedX = margin;
+      placedY += rowMaxH + 6;
+      rowMaxH = 0;
+    }
+    if (placedY + h / 2 + margin > boardH) {
+      // Board full — place anyway at best effort (will be flagged by DRC if out of bounds).
+    }
+
+    const center: Point = { x: placedX + w / 2, y: placedY + h / 2 };
+    const pads = buildPads(id, [], center, w, h, 0); // pins filled by caller via setPads
+
+    placements.push({
+      componentId: id,
+      name: names[id] ?? id,
+      center,
+      w,
+      h,
+      rotationDeg: 0,
+      pads,
+    });
+
+    rowMaxH = Math.max(rowMaxH, h);
+    placedX += stepX;
+  }
+
+  // Collision detection: pairwise AABB overlap.
+  for (let i = 0; i < placements.length; i++) {
+    const a = placements[i];
+    const aabbA = aabbFromRect(a.center.x, a.center.y, a.w, a.h, a.rotationDeg);
+    for (let j = i + 1; j < placements.length; j++) {
+      const b = placements[j];
+      const aabbB = aabbFromRect(b.center.x, b.center.y, b.w, b.h, b.rotationDeg);
+      if (aabbOverlap(aabbA, aabbB)) {
+        overlaps.push({ a: a.componentId, b: b.componentId });
+      }
+    }
+  }
+
+  return { placements, overlaps };
+}
+
+/** Attach pads to placements using pin names and positions around the footprint edge. */
+export function attachPads(placements: PcbPlacement[], pinNamesByComponent: Record<string, string[]>): PcbPlacement[] {
+  return placements.map((p) => {
+    const pins = pinNamesByComponent[p.componentId] ?? [];
+    return { ...p, pads: buildPads(p.componentId, pins, p.center, p.w, p.h, p.rotationDeg) };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Manhattan A* router
+// ---------------------------------------------------------------------------
+
+interface GridNode {
+  g: number;
+  h: number;
+  parent: GridNode | null;
+  x: number;
+  y: number;
+  closed: boolean;
+}
+
+function heuristic(x1: number, y1: number, x2: number, y2: number): number {
+  return Math.abs(x1 - x2) + Math.abs(y1 - y2);
+}
+
+/** Simple grid A* over a rectangular board with blocked cells. Returns path points
+ * or null if no path exists. */
+export function aStarRoute(
+  start: Point,
+  goal: Point,
+  blocked: Set<string>,
+  boardW: number,
+  boardH: number,
+  gridSize: number
+): Point[] | null {
+  const cols = Math.ceil(boardW / gridSize);
+  const rows = Math.ceil(boardH / gridSize);
+  const sx = Math.round(start.x / gridSize);
+  const sy = Math.round(start.y / gridSize);
+  const gx = Math.round(goal.x / gridSize);
+  const gy = Math.round(goal.y / gridSize);
+
+  const key = (x: number, y: number) => `${x},${y}`;
+  const open: GridNode[] = [];
+  const closed = new Set<string>();
+
+  const startNode: GridNode = { g: 0, h: heuristic(sx, sy, gx, gy), parent: null, x: sx, y: sy, closed: false };
+  open.push(startNode);
+
+  const dirs = [
+    { dx: 1, dy: 0, cost: 1 },
+    { dx: -1, dy: 0, cost: 1 },
+    { dx: 0, dy: 1, cost: 1 },
+    { dx: 0, dy: -1, cost: 1 },
+  ];
+
+  while (open.length > 0) {
+    // Pick lowest f = g + h.
+    open.sort((a, b) => a.g + a.h - (b.g + b.h));
+    const cur = open.shift()!;
+    if (cur.closed) continue;
+    cur.closed = true;
+    closed.add(key(cur.x, cur.y));
+
+    if (cur.x === gx && cur.y === gy) {
+      // Reconstruct path.
+      const path: Point[] = [];
+      let node: GridNode | null = cur;
+      while (node) {
+        path.push({ x: node.x * gridSize + gridSize / 2, y: node.y * gridSize + gridSize / 2 });
+        node = node.parent;
+      }
+      path.reverse();
+      return path;
+    }
+
+    for (const d of dirs) {
+      const nx = cur.x + d.dx;
+      const ny = cur.y + d.dy;
+      if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) continue;
+      const k = key(nx, ny);
+      if (closed.has(k)) continue;
+      if (blocked.has(k)) continue;
+
+      const g = cur.g + d.cost;
+      const h = heuristic(nx, ny, gx, gy);
+      const existing = open.find((n) => n.x === nx && n.y === ny);
+      if (existing && existing.g <= g) continue;
+      if (existing) {
+        existing.g = g;
+        existing.h = h;
+        existing.parent = cur;
+      } else {
+        open.push({ g, h, parent: cur, x: nx, y: ny, closed: false });
+      }
+    }
+  }
+  return null;
+}
+
+/** Build blocked-cell set from inflated footprints (obstacles). */
+function buildObstacles(placements: PcbPlacement[], inflate: number, boardW: number, boardH: number, gridSize: number): Set<string> {
+  const blocked = new Set<string>();
+  const cols = Math.ceil(boardW / gridSize);
+  const rows = Math.ceil(boardH / gridSize);
+
+  for (const p of placements) {
+    // aabbFromRect with w+inflate*2 already extends `inflate` on each side.
+    const aabb = aabbFromRect(p.center.x, p.center.y, p.w + inflate * 2, p.h + inflate * 2, p.rotationDeg);
+    const c0 = Math.floor(aabb.minX / gridSize);
+    const c1 = Math.floor(aabb.maxX / gridSize);
+    const r0 = Math.floor(aabb.minY / gridSize);
+    const r1 = Math.floor(aabb.maxY / gridSize);
+    for (let cx = Math.max(0, c0); cx <= Math.min(cols - 1, c1); cx++) {
+      for (let cy = Math.max(0, r0); cy <= Math.min(rows - 1, r1); cy++) {
+        blocked.add(`${cx},${cy}`);
+      }
+    }
+  }
+  return blocked;
+}
+
+/** Route all connections. Marks routed traces as obstacles for subsequent nets. */
+export function routeTraces(
+  connections: Array<{ net: string; fromPin: PcbPad; toPin: PcbPad }>,
+  placements: PcbPlacement[],
+  boardW: number,
+  boardH: number,
+  gridSize = 1,
+  traceWidth = 0.25
+): { traces: PcbTrace[]; unrouted: Array<{ net: string; reason: string }> } {
+  const traces: PcbTrace[] = [];
+  const unrouted: Array<{ net: string; reason: string }> = [];
+  const routedBlocked = new Set<string>(); // cells occupied by previous traces
+  const footprintBlocked = buildObstacles(placements, traceWidth + 0.2, boardW, boardH, gridSize);
+
+  for (const conn of connections) {
+    const start = conn.fromPin.center;
+    const goal = conn.toPin.center;
+
+    // Combine footprint obstacles + previously routed traces.
+    const blocked = new Set(footprintBlocked);
+    for (const k of routedBlocked) blocked.add(k);
+
+    // Unblock start and goal cells — pad centers sit inside the inflated
+    // footprint obstacle but must be reachable as route endpoints. Also
+    // unblock the immediate 3x3 neighbourhood so the router can exit the pad.
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        blocked.delete(`${Math.round(start.x / gridSize) + dx},${Math.round(start.y / gridSize) + dy}`);
+        blocked.delete(`${Math.round(goal.x / gridSize) + dx},${Math.round(goal.y / gridSize) + dy}`);
+      }
+    }
+
+    const path = aStarRoute(start, goal, blocked, boardW, boardH, gridSize);
+    if (!path) {
+      unrouted.push({ net: conn.net, reason: 'No path found around obstacles' });
+      continue;
+    }
+
+    const trace: PcbTrace = {
+      net: conn.net,
+      from: { componentId: conn.fromPin.componentId, pinName: conn.fromPin.pinName },
+      to: { componentId: conn.toPin.componentId, pinName: conn.toPin.pinName },
+      points: path,
+    };
+    traces.push(trace);
+
+    // Add trace cells to blocked set for subsequent nets (inflate by clearance).
+    const inflateCells = Math.ceil((traceWidth + 0.2) / gridSize);
+    for (let i = 0; i < path.length - 1; i++) {
+      const p1 = path[i];
+      const p2 = path[i + 1];
+      const steps = Math.max(Math.abs(p2.x - p1.x), Math.abs(p2.y - p1.y)) / gridSize + 1;
+      for (let s = 0; s <= steps; s++) {
+        const t = s / steps;
+        const x = p1.x + (p2.x - p1.x) * t;
+        const y = p1.y + (p2.y - p1.y) * t;
+        const cx = Math.round(x / gridSize);
+        const cy = Math.round(y / gridSize);
+        for (let dx = -inflateCells; dx <= inflateCells; dx++) {
+          for (let dy = -inflateCells; dy <= inflateCells; dy++) {
+            blocked.add(`${cx + dx},${cy + dy}`);
+          }
+        }
+        routedBlocked.add(`${cx},${cy}`);
+      }
+    }
+  }
+
+  return { traces, unrouted };
+}
+
+// ---------------------------------------------------------------------------
+// DRC
+// ---------------------------------------------------------------------------
+
+const DEFAULT_RULES: PcbDesignRules = {
+  traceWidth: 0.25,
+  traceClearance: 0.2,
+  padToTraceClearance: 0.2,
+  viaToTraceClearance: 0.2,
+  minAnnularRing: 0.1,
+};
+
+/** Run DRC checks on a completed layout. */
+export function runPcbDrc(
+  traces: PcbTrace[],
+  pads: PcbPad[],
+  vias: PcbVia[],
+  rules: PcbDesignRules = DEFAULT_RULES
+): { violations: PcbDrcViolation[]; summary: PcbDrcSummary } {
+  const violations: PcbDrcViolation[] = [];
+
+  // Build segment lists from trace polylines.
+  const traceSegments: Array<{ net: string; x1: number; y1: number; x2: number; y2: number }> = [];
+  for (const tr of traces) {
+    for (let i = 0; i < tr.points.length - 1; i++) {
+      traceSegments.push({
+        net: tr.net,
+        x1: tr.points[i].x,
+        y1: tr.points[i].y,
+        x2: tr.points[i + 1].x,
+        y2: tr.points[i + 1].y,
+      });
+    }
+  }
+
+  // Pad rectangles as AABBs.
+  const padRects: Array<{ componentId: string; pinName: string; rect: Aabb }> = [];
+  for (const pad of pads) {
+    padRects.push({
+      componentId: pad.componentId,
+      pinName: pad.pinName,
+      rect: {
+        minX: pad.center.x - pad.w / 2,
+        minY: pad.center.y - pad.h / 2,
+        maxX: pad.center.x + pad.w / 2,
+        maxY: pad.center.y + pad.h / 2,
+      },
+    });
+  }
+
+  // Rule: trace-to-trace clearance.
+  for (let i = 0; i < traceSegments.length; i++) {
+    const s1 = traceSegments[i];
+    for (let j = i + 1; j < traceSegments.length; j++) {
+      const s2 = traceSegments[j];
+      const d = segmentToSegmentDist(s1.x1, s1.y1, s1.x2, s1.y2, s2.x1, s2.y1, s2.x2, s2.y2);
+      if (d < rules.traceClearance && d > 0) {
+        violations.push({
+          id: `drc:trace-to-trace:${s1.net}:${s2.net}:${i}:${j}`,
+          severity: 'error',
+          category: 'trace-to-trace',
+          message: `Trace "${s1.net}" is ${d.toFixed(2)}mm from trace "${s2.net}" (need ${rules.traceClearance}mm)`,
+          net: s1.net,
+          location: { x: (s1.x1 + s1.x2) / 2, y: (s1.y1 + s1.y2) / 2 },
+        });
+      }
+    }
+  }
+
+  // Rule: trace-to-pad clearance.
+  for (const seg of traceSegments) {
+    for (const pad of padRects) {
+      const d = segmentToRectDist(seg.x1, seg.y1, seg.x2, seg.y2, pad.rect);
+      if (d < rules.padToTraceClearance && d > 0) {
+        violations.push({
+          id: `drc:trace-to-pad:${seg.net}:${pad.componentId}:${pad.pinName}`,
+          severity: 'error',
+          category: 'trace-to-pad',
+          message: `Trace "${seg.net}" is ${d.toFixed(2)}mm from pad "${pad.pinName}" on "${pad.componentId}" (need ${rules.padToTraceClearance}mm)`,
+          net: seg.net,
+          location: { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 },
+        });
+      }
+    }
+  }
+
+  // Rule: trace-to-via clearance.
+  for (const seg of traceSegments) {
+    for (const via of vias) {
+      const d = pointToSegmentDist(via.x, via.y, seg.x1, seg.y1, seg.x2, seg.y2);
+      if (d < rules.viaToTraceClearance && d > 0) {
+        violations.push({
+          id: `drc:trace-to-via:${seg.net}:${via.x}:${via.y}`,
+          severity: 'error',
+          category: 'trace-to-via',
+          message: `Trace "${seg.net}" is ${d.toFixed(2)}mm from via at (${via.x.toFixed(1)},${via.y.toFixed(1)}) (need ${rules.viaToTraceClearance}mm)`,
+          net: seg.net,
+          location: { x: via.x, y: via.y },
+        });
+      }
+    }
+  }
+
+  const errors = violations.filter((v) => v.severity === 'error').length;
+  const summary: PcbDrcSummary = {
+    total: violations.length,
+    errors,
+    warnings: 0,
+    clean: errors === 0,
+  };
+  return { violations, summary };
+}
+
+// ---------------------------------------------------------------------------
+// Three.js output adapter (pure data — renderer imports Three.js)
+// ---------------------------------------------------------------------------
+
+export interface ThreeBoardGeometry {
+  board: { w: number; h: number; thickness: number };
+  traces: Array<{ net: string; points: Point[]; width: number }>;
+  pads: Array<{ componentId: string; pinName: string; x: number; y: number; w: number; h: number }>;
+  vias: Array<{ x: number; y: number; drill: number }>;
+  components: Array<{ componentId: string; name: string; x: number; y: number; w: number; h: number }>;
+}
+
+/** Convert layout result to Three.js-ready geometry descriptions. */
+export function pcbToThreeJs(
+  placements: PcbPlacement[],
+  traces: PcbTrace[],
+  pads: PcbPad[],
+  vias: PcbVia[],
+  boardW: number,
+  boardH: number,
+  traceWidth: number
+): ThreeBoardGeometry {
+  return {
+    board: { w: boardW, h: boardH, thickness: 1.6 },
+    traces: traces.map((t) => ({ net: t.net, points: t.points, width: traceWidth })),
+    pads: pads.map((p) => ({ componentId: p.componentId, pinName: p.pinName, x: p.center.x, y: p.center.y, w: p.w, h: p.h })),
+    vias: vias.map((v) => ({ x: v.x, y: v.y, drill: v.drill })),
+    components: placements.map((p) => ({ componentId: p.componentId, name: p.name, x: p.center.x, y: p.center.y, w: p.w, h: p.h })),
+  };
+}

@@ -26,6 +26,24 @@ import { normalisePin, parseCurrency, parsePriceValue } from '../src/main/sync/s
 import { MVR_PER_USD, approxUsd, formatNative, isComparable, toUsd } from '../src/shared/money.ts'
 import type { Component, Connection } from '../src/shared/types.ts'
 import { runDrc, summarizeDrc } from '../src/main/drc.ts'
+import {
+  placeComponents,
+  attachPads,
+  routeTraces,
+  runPcbDrc,
+  pcbToThreeJs,
+  aabbFromRect,
+  aabbOverlap,
+} from '../src/main/pcb-layout.ts'
+import {
+  parseNetlist,
+  buildMnaSystem,
+  solveLinearSystem,
+  solveDc,
+  runTransient,
+  simulateDc,
+  simulateTransient,
+} from '../src/main/circuit-sim.ts'
 
 let failures = 0
 let checks = 0
@@ -604,6 +622,230 @@ check('diff: no connections removed', diff12.connectionsRemoved === 0)
 
 const diff13 = diffVersions(v1, v3)
 check('diff: identical designs show no changes', diff13.titleChanged === false && diff13.componentsAdded === 0 && diff13.componentsRemoved === 0 && diff13.componentsChanged === 0 && diff13.connectionsAdded === 0 && diff13.connectionsRemoved === 0)
+
+// ---------------------------------------------------------------------------
+// PCB layout spike: placement, routing, DRC
+// ---------------------------------------------------------------------------
+
+const pcbCompIds = ['c1', 'c2', 'c3']
+const pcbNames = { c1: 'MCU', c2: 'LED', c3: 'Resistor' }
+const pcbPinCounts = { c1: 8, c2: 2, c3: 2 }
+
+const { placements, overlaps } = placeComponents(pcbCompIds, pcbNames, 100, 80)
+check('PCB: places all 3 components', placements.length === 3, placements.length)
+check('PCB: no overlaps on empty board', overlaps.length === 0, overlaps)
+check('PCB: all placements inside board', placements.every((p) => p.center.x >= 0 && p.center.x <= 100 && p.center.y >= 0 && p.center.y <= 80))
+
+// Attach pins to placements.
+const pinned = attachPads(placements, { c1: ['VCC', 'GND', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6'], c2: ['A', 'K'], c3: ['1', '2'] })
+check('PCB: pads attached per component', pinned.every((p) => p.pads.length > 0))
+
+// Overlap detection: two placements at the same position must overlap.
+const dupPlacements = [
+  {
+    componentId: 'c1', name: 'A', center: { x: 10, y: 10 }, w: 10, h: 10, rotationDeg: 0, pads: []
+  },
+  {
+    componentId: 'c2', name: 'B', center: { x: 10, y: 10 }, w: 10, h: 10, rotationDeg: 0, pads: []
+  },
+];
+const dupAabbA = aabbFromRect(dupPlacements[0].center.x, dupPlacements[0].center.y, dupPlacements[0].w, dupPlacements[0].h, 0);
+const dupAabbB = aabbFromRect(dupPlacements[1].center.x, dupPlacements[1].center.y, dupPlacements[1].w, dupPlacements[1].h, 0);
+check('PCB: detects overlap when components forced together', aabbOverlap(dupAabbA, dupAabbB) === true)
+
+// Routing: simple two-pin connection with no obstacles.
+const routeResult = routeTraces(
+  [
+    { net: '5V', fromPin: pinned[0].pads[0], toPin: pinned[1].pads[0] },
+  ],
+  pinned,
+  100,
+  80,
+  1,
+  0.25
+)
+check('PCB: routes a simple connection', routeResult.traces.length === 1, routeResult.traces.length)
+check('PCB: route has at least 2 points', routeResult.traces[0]?.points.length ?? 0 >= 2)
+check('PCB: no unrouted on simple board', routeResult.unrouted.length === 0, routeResult.unrouted)
+
+// Routing around obstacle: place a large component between source and target.
+const blockedPlacements = [
+  {
+    componentId: 'blocker',
+    name: 'Blocker',
+    center: { x: 50, y: 40 },
+    w: 30,
+    h: 30,
+    rotationDeg: 0,
+    pads: [],
+  },
+  {
+    componentId: 'src',
+    name: 'Source',
+    center: { x: 20, y: 40 },
+    w: 10,
+    h: 10,
+    rotationDeg: 0,
+    pads: [{ componentId: 'src', pinName: 'P1', center: { x: 15, y: 40 }, w: 2, h: 2 }],
+  },
+  {
+    componentId: 'dst',
+    name: 'Dest',
+    center: { x: 80, y: 40 },
+    w: 10,
+    h: 10,
+    rotationDeg: 0,
+    pads: [{ componentId: 'dst', pinName: 'P1', center: { x: 85, y: 40 }, w: 2, h: 2 }],
+  },
+]
+const blockedResult = routeTraces(
+  [
+    { net: 'SIG', fromPin: blockedPlacements[1].pads[0], toPin: blockedPlacements[2].pads[0] },
+  ],
+  blockedPlacements,
+  100,
+  80,
+  1,
+  0.25
+)
+check('PCB: routes around obstacle', blockedResult.traces.length === 1 || blockedResult.unrouted.length === 0)
+
+// DRC: trace-to-trace clearance violation.
+const drcViolations = runPcbDrc(
+  [
+    { net: 'A', from: { componentId: 'c1', pinName: 'P1' }, to: { componentId: 'c2', pinName: 'P1' }, points: [{ x: 10, y: 10 }, { x: 20, y: 10 }] },
+    { net: 'B', from: { componentId: 'c1', pinName: 'P2' }, to: { componentId: 'c2', pinName: 'P2' }, points: [{ x: 10, y: 10.1 }, { x: 20, y: 10.1 }] },
+  ],
+  [],
+  [],
+  { traceWidth: 0.25, traceClearance: 0.5, padToTraceClearance: 0.2, viaToTraceClearance: 0.2, minAnnularRing: 0.1 }
+)
+check('PCB DRC: detects trace-to-trace clearance violation', drcViolations.violations.some((v) => v.category === 'trace-to-trace'), drcViolations.violations.length)
+check('PCB DRC: not clean when violations exist', drcViolations.summary.clean === false)
+
+// DRC: properly spaced traces → clean.
+const drcClean = runPcbDrc(
+  [
+    { net: 'A', from: { componentId: 'c1', pinName: 'P1' }, to: { componentId: 'c2', pinName: 'P1' }, points: [{ x: 10, y: 10 }, { x: 20, y: 10 }] },
+    { net: 'B', from: { componentId: 'c1', pinName: 'P2' }, to: { componentId: 'c2', pinName: 'P2' }, points: [{ x: 10, y: 20 }, { x: 20, y: 20 }] },
+  ],
+  [],
+  [],
+  { traceWidth: 0.25, traceClearance: 0.5, padToTraceClearance: 0.2, viaToTraceClearance: 0.2, minAnnularRing: 0.1 }
+)
+check('PCB DRC: clean when traces spaced apart', drcClean.summary.clean === true)
+
+// Three.js adapter: produces geometry descriptions.
+const threeGeom = pcbToThreeJs(pinned, routeResult.traces, pinned.flatMap((p) => p.pads), [], 100, 80, 0.25)
+check('PCB Three.js: board geometry present', threeGeom.board.w === 100 && threeGeom.board.h === 80)
+check('PCB Three.js: traces exported', threeGeom.traces.length === routeResult.traces.length)
+check('PCB Three.js: pads exported', threeGeom.pads.length > 0)
+check('PCB Three.js: components exported', threeGeom.components.length === pinned.length)
+
+// ---------------------------------------------------------------------------
+// Circuit simulation spike: netlist, MNA, DC operating point, transient
+// ---------------------------------------------------------------------------
+
+// Simple resistor divider: 5V source → R1 → node → R2 → GND.
+const dividerInput = {
+  components: [
+    { id: 'v1', name: '5V Source', category: 'Power', pins: ['+', '-'] },
+    { id: 'r1', name: 'R1 1k', category: 'Resistor', pins: ['1', '2'] },
+    { id: 'r2', name: 'R2 1k', category: 'Resistor', pins: ['1', '2'] },
+  ],
+  connections: [
+    { from: { componentId: 'v1', pin: '+' }, to: { componentId: 'r1', pin: '1' }, kind: 'power', net: '5V' },
+    { from: { componentId: 'r1', pin: '2' }, to: { componentId: 'r2', pin: '1' }, kind: 'signal', net: 'MID' },
+    { from: { componentId: 'r2', pin: '2' }, to: { componentId: 'v1', pin: '-' }, kind: 'ground', net: 'GND' },
+  ],
+}
+
+const { nodes: divNodes, elements: divElements } = parseNetlist(dividerInput.components, dividerInput.connections)
+check('Circuit: divider parses to 3 nodes (5V, MID, GND)', divNodes.length === 3, divNodes.length)
+check('Circuit: divider has GND node', divNodes.some((nd) => nd.isGround))
+check('Circuit: divider has 2 resistor elements', divElements.filter((e) => e.type === 'resistor').length === 2)
+check('Circuit: divider has 1 voltage source', divElements.filter((e) => e.type === 'voltageSource').length === 1)
+
+// DC operating point: V_MID should be 2.5V (equal resistors).
+const divDc = simulateDc(dividerInput)
+check('Circuit: divider DC converges', divDc.converged === true, divDc.message)
+const midVoltage = divDc.nodeVoltages.get('MID')
+check('Circuit: divider MID ≈ 2.5V', midVoltage !== undefined && Math.abs(midVoltage - 2.5) < 0.05, midVoltage)
+
+// MNA symmetry check for linear circuits.
+const { A: divA, b: divB } = buildMnaSystem(divNodes, divElements)
+let symmetric = true
+for (let i = 0; i < divA.length; i++) {
+  for (let j = 0; j < divA.length; j++) {
+    if (Math.abs(divA[i][j] - divA[j][i]) > 1e-10) {
+      symmetric = false
+      break
+    }
+  }
+}
+check('Circuit: MNA matrix is symmetric for linear circuit', symmetric)
+
+// LED circuit: 5V → R → LED → GND. LED forward voltage should be ~1.8-2.2V.
+const ledInput = {
+  components: [
+    { id: 'v1', name: '5V Source', category: 'Power', pins: ['+', '-'] },
+    { id: 'r1', name: 'R1 220Ω', category: 'Resistor', pins: ['1', '2'] },
+    { id: 'led1', name: 'LED', category: 'LED', pins: ['A', 'K'] },
+  ],
+  connections: [
+    { from: { componentId: 'v1', pin: '+' }, to: { componentId: 'r1', pin: '1' }, kind: 'power', net: '5V' },
+    { from: { componentId: 'r1', pin: '2' }, to: { componentId: 'led1', pin: 'A' }, kind: 'signal', net: 'LED_ANODE' },
+    { from: { componentId: 'led1', pin: 'K' }, to: { componentId: 'v1', pin: '-' }, kind: 'ground', net: 'GND' },
+  ],
+}
+
+const ledDc = simulateDc(ledInput)
+check('Circuit: LED DC converges', ledDc.converged === true, ledDc.message)
+const ledAnodeV = ledDc.nodeVoltages.get('LED_ANODE')
+check('Circuit: LED anode ≈ 0.5-2V', ledAnodeV !== undefined && ledAnodeV >= 0.5 && ledAnodeV <= 2.0, ledAnodeV)
+
+// Transient RC circuit: 5V → R → C → GND. At t=RC, capacitor ≈ 63.2% of 5V = 3.16V.
+const rcInput = {
+  components: [
+    { id: 'v1', name: '5V Source', category: 'Power', pins: ['+', '-'] },
+    { id: 'r1', name: 'R1 1k', category: 'Resistor', pins: ['1', '2'] },
+    { id: 'c1', name: 'C1 1µF', category: 'capacitor', pins: ['1', '2'] },
+  ],
+  connections: [
+    { from: { componentId: 'v1', pin: '+' }, to: { componentId: 'r1', pin: '1' }, kind: 'power', net: '5V' },
+    { from: { componentId: 'r1', pin: '2' }, to: { componentId: 'c1', pin: '1' }, kind: 'signal', net: 'CAP_NODE' },
+    { from: { componentId: 'c1', pin: '2' }, to: { componentId: 'v1', pin: '-' }, kind: 'ground', net: 'GND' },
+  ],
+}
+
+const rcTransient = simulateTransient(rcInput, 0.01, 0.0001) // 10ms, 0.1ms step → RC = 1ms, at t=1ms expect ~3.16V
+check('Circuit: RC transient converges', rcTransient.converged === true, rcTransient.converged ? '' : 'no message')
+const capVoltages = rcTransient.nodeVoltagesOverTime.get('CAP_NODE') ?? []
+// Find voltage at t ≈ 1ms (step index 10).
+const vAt1ms = capVoltages[10]
+check('Circuit: RC at t=1ms ≈ 3.16V (63.2%)', vAt1ms !== undefined && Math.abs(vAt1ms - 3.16) < 0.3, vAt1ms)
+// Final voltage should approach 5V.
+const vFinal = capVoltages[capVoltages.length - 1]
+check('Circuit: RC final ≈ 5V', vFinal !== undefined && Math.abs(vFinal - 5) < 0.5, vFinal)
+
+// Singular matrix detection: floating node with no path to ground.
+// GMIN provides tiny leakage, so the matrix isn't strictly singular —
+// but floating node voltages end up near 0 (not meaningful).
+const floatingInput = {
+  components: [
+    { id: 'r1', name: 'R1', category: 'Resistor', pins: ['1', '2'] },
+    { id: 'r2', name: 'R2', category: 'Resistor', pins: ['1', '2'] },
+  ],
+  connections: [
+    { from: { componentId: 'r1', pin: '1' }, to: { componentId: 'r2', pin: '1' }, kind: 'signal', net: 'FLOAT' },
+  ],
+}
+const floatingDc = simulateDc(floatingInput)
+check('Circuit: floating node voltages near 0', Math.abs(floatingDc.nodeVoltages.get('FLOAT') ?? 1) < 0.01, floatingDc.nodeVoltages.get('FLOAT'))
+
+// Empty circuit handling.
+const emptyDc = simulateDc({ components: [], connections: [] })
+check('Circuit: empty circuit handled gracefully', emptyDc.converged === true)
 
 // ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)
