@@ -108,6 +108,7 @@ export interface Project {
   id: string
   createdAt: number
   updatedAt: number
+  archived: boolean
   spec: DesignSpec
   chat: ChatMessage[]
   versions: DesignVersion[]

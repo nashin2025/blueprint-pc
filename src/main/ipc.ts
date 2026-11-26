@@ -16,6 +16,7 @@ import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
 import type { AppSettings, DesignSpec, GenerateRequest, InfoRequest, Project } from '@shared/types'
+import { createBundle, extractBundle } from './zip'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -88,6 +89,26 @@ export function registerIpc(): void {
 
   ipcMain.handle('projects:delete', async (_e, id: string) => {
     return store.delete(id)
+  })
+
+  ipcMain.handle('projects:archive', async (_e, args: { id: string; archived: boolean }) => {
+    return store.archive(args.id, args.archived)
+  })
+
+  ipcMain.handle('projects:purge', async (_e, id: string) => {
+    return store.purge(id)
+  })
+
+  ipcMain.handle('projects:duplicate', async (_e, id: string) => {
+    return store.duplicate(id)
+  })
+
+  ipcMain.handle('projects:export', async (_e, args: { id: string; outputPath: string }) => {
+    return await createBundle(args.id, args.outputPath)
+  })
+
+  ipcMain.handle('projects:import', async (_e, zipPath: string) => {
+    return await extractBundle(zipPath)
   })
 
   ipcMain.handle('settings:load', async (): Promise<AppSettings> => {

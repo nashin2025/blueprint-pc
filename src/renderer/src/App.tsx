@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar'
 import Home from './pages/Home'
 import ProjectView from './pages/ProjectView'
 import PartLibrary from './pages/PartLibrary'
+import ProjectLibrary from './pages/ProjectLibrary'
 import SettingsDialog from './components/SettingsDialog'
 import CommandPalette from './components/CommandPalette'
 import StatusBar from './components/StatusBar'
@@ -30,6 +31,7 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
   const { projects, activeId, loaded, hydrate, settings, updateSettings, canvasZoom } = useApp()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [libraryOpen, setLibraryOpen] = useState(false)
+  const [projectLibraryOpen, setProjectLibraryOpen] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<TabId>('overview')
 
@@ -81,6 +83,15 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
         shortcut: 'L',
         run: () => {
           setLibraryOpen(true)
+          setPaletteOpen(false)
+        }
+      },
+      {
+        id: 'project-library',
+        label: 'Project library',
+        hint: 'Manage, rename, duplicate, export designs',
+        run: () => {
+          setProjectLibraryOpen(true)
           setPaletteOpen(false)
         }
       },
@@ -168,6 +179,14 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
           </div>
         ) : libraryOpen ? (
           <PartLibrary onBack={() => setLibraryOpen(false)} />
+        ) : projectLibraryOpen ? (
+          <ProjectLibrary
+            onBack={() => setProjectLibraryOpen(false)}
+            onOpenProject={(id) => {
+              setProjectLibraryOpen(false)
+              useApp.getState().selectProject(id)
+            }}
+          />
         ) : !hasKey ? (
           <NoKeyState onOpenSettings={() => setSettingsOpen(true)} />
         ) : active ? (
