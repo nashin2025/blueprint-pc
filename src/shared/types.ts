@@ -312,3 +312,26 @@ export interface DrcSummary {
   infos: number
   clean: boolean
 }
+
+/** Design rule check parameters for PCB layout clearance. All values in mm. */
+export interface PcbDesignRules {
+  /** Minimum trace width (mm). */
+  traceWidth: number
+  /** Minimum clearance between two traces on the same layer (mm). */
+  traceClearance: number
+  /** Minimum clearance from a trace to a pad (mm). */
+  padToTraceClearance: number
+  /** Minimum clearance from a trace to a via (mm). */
+  viaToTraceClearance: number
+  /** Minimum annular ring around a via (mm). */
+  minAnnularRing: number
+}
+
+/** Default PCB design rules (generic 2-layer, 6mil process). */
+export const DEFAULT_PCB_RULES: PcbDesignRules = {
+  traceWidth: 0.2,      // 0.2mm ≈ 7.9mil
+  traceClearance: 0.2,  // 0.2mm ≈ 7.9mil
+  padToTraceClearance: 0.2,
+  viaToTraceClearance: 0.2,
+  minAnnularRing: 0.1
+}

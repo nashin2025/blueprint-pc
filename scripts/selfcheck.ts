@@ -45,6 +45,7 @@ import {
   simulateTransient,
 } from '../src/main/circuit-sim.ts'
 import { buildNetlist } from '../src/main/netlist.ts'
+import { DEFAULT_PCB_RULES } from '../src/shared/types.ts'
 
 let failures = 0
 let checks = 0
@@ -910,6 +911,60 @@ const emptySpec = {
 
 const emptyNetlist = buildNetlist(emptySpec)
 check('Netlist: empty connections produces header only', emptyNetlist.includes('# Blueprint PC netlist') && !/^NET:/m.test(emptyNetlist))
+
+// ---------------------------------------------------------------------------
+// DRC rules
+// ---------------------------------------------------------------------------
+
+const drcTestSpec = {
+  title: 'DRC test',
+  summary: 'A design to test DRC rules.',
+  difficulty: 'beginner' as const,
+  components: [
+    { id: 'c1', name: 'Resistor', category: 'Resistor', quantity: 1, pins: ['1', '2'], designator: 'R1' },
+    { id: 'c2', name: 'LED', category: 'LED', quantity: 1, pins: ['A', 'K'], designator: 'LED1' },
+    { id: 'c3', name: 'Duplicate', category: 'Resistor', quantity: 1, pins: ['1', '2'], designator: 'R1' }, // dup designator
+    { id: 'c4', name: 'Floating', category: 'Resistor', quantity: 1, pins: ['1', '2'], modelFilePath: '/models/r.stl' } // no connections
+  ],
+  connections: [
+    { id: 'w1', from: { componentId: 'c1', pin: '1' }, to: { componentId: 'c2', pin: 'A' }, kind: 'signal', net: '5V' },
+    { id: 'w2', from: { componentId: 'c1', pin: '2' }, to: { componentId: 'c3', pin: '1' }, kind: 'signal', net: 'GND' }, // c1 pin 2 on GND, pin 1 on 5V -> shorted
+    { id: 'w3', from: { componentId: 'c2', pin: 'K' }, to: { componentId: 'c3', pin: '2' }, kind: 'ground', net: 'GND' }
+  ],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const drcTestViolations = runDrc(drcTestSpec)
+const drcTestSummary = summarizeDrc(drcTestViolations)
+check('DRC: finds unconnected pin (c4 pin 1)', drcTestViolations.some((v) => v.category === 'unconnected-pin' && v.componentId === 'c4' && v.pinName === '1'))
+check('DRC: finds duplicate designator (R1)', drcTestViolations.some((v) => v.category === 'duplicate-designator' && v.designator === 'R1'))
+check('DRC: duplicate designator produces 2 violations', drcTestViolations.filter((v) => v.category === 'duplicate-designator').length === 2)
+check('DRC: summary counts errors', drcTestSummary.errors >= 4)
+check('DRC: not clean', drcTestSummary.clean === false)
+
+// Clean design: no violations
+const drcCleanSpec = {
+  title: 'Clean test',
+  summary: 'A clean design.',
+  difficulty: 'beginner' as const,
+  components: [
+    { id: 'c1', name: 'Resistor', category: 'Resistor', quantity: 1, pins: ['1', '2'], modelFilePath: '/models/r.stl', designator: 'R1' },
+    { id: 'c2', name: 'LED', category: 'LED', quantity: 1, pins: ['A', 'K'], modelFilePath: '/models/led.stl', designator: 'LED1' }
+  ],
+  connections: [
+    { id: 'w1', from: { componentId: 'c1', pin: '1' }, to: { componentId: 'c2', pin: 'A' }, kind: 'power', net: '5V' },
+    { id: 'w2', from: { componentId: 'c1', pin: '2' }, to: { componentId: 'c2', pin: 'K' }, kind: 'ground', net: 'GND' }
+  ],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const drcCleanViolations = runDrc(drcCleanSpec)
+const drcCleanSummary = summarizeDrc(drcCleanViolations)
+check('DRC: clean design has no violations', drcCleanSummary.total === 0)
+check('DRC: clean design is clean', drcCleanSummary.clean === true)
+
+// Default rules are valid
+check('DRC: default rules have valid values', DEFAULT_PCB_RULES.traceWidth > 0 && DEFAULT_PCB_RULES.traceClearance > 0)
 
 // ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)

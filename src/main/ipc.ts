@@ -16,10 +16,11 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, DesignSpec, GenerateRequest, InfoRequest, Project } from '@shared/types'
+import type { AppSettings, DesignSpec, GenerateRequest, InfoRequest, PcbDesignRules, Project } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
+import { getDrcRules, saveDrcRules } from './drc-rules'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -191,9 +192,28 @@ export function registerIpc(): void {
     try {
       const project = store.get(projectId)
       if (!project) return { ok: false, error: `Project not found: ${projectId}` }
-      const violations = runDrc(project.spec)
+      const rules = getDrcRules(projectId)
+      const violations = runDrc(project.spec, rules)
       const summary = summarizeDrc(violations)
-      return { ok: true as const, data: { violations, summary } }
+      return { ok: true as const, data: { violations, summary, rules } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('drc:get-rules', async (_e, projectId: string) => {
+    try {
+      const rules = getDrcRules(projectId)
+      return { ok: true as const, data: rules }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('drc:save-rules', async (_e, args: { projectId: string; rules: PcbDesignRules }) => {
+    try {
+      saveDrcRules(args.projectId, args.rules)
+      return { ok: true as const }
     } catch (err) {
       return fail(err)
     }
