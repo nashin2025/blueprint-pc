@@ -1587,9 +1587,14 @@ import {
   checkBoardEdgeClearance
 } from '../src/main/mech-clearance.ts'
 import {
-  checkTraceClearance
+  checkTraceClearance,
+  routeTracesWithPushAndShove,
+  routeDifferentialPair
 } from '../src/main/pcb-layout.ts'
-import type { PcbPlacement, PcbTrace, PcbPad, PcbDesignRules } from '../src/main/pcb-layout.ts'
+import { generateIpc2581 } from '../src/main/ipc2581.ts'
+import { buildAnnotationLinks, findDivergences, generateEco, backwardAnnotation } from '../src/main/annotation.ts'
+import type { PcbPlacement, PcbTrace, PcbPad, PcbDesignRules, DifferentialPair } from '../src/main/pcb-layout.ts'
+import type { AnnotationLink } from '../src/main/annotation.ts'
 
 // Pick-place centroid CSV
 const testPlacements: PcbPlacement[] = [
@@ -1641,6 +1646,147 @@ const existingTrace: PcbTrace = {
 const drcViolations2 = checkTraceClearance(closeTrace, [existingTrace], testPads, rules)
 check('real-time DRC detects close traces', drcViolations2.length > 0)
 check('real-time DRC violation has category', drcViolations2[0].category === 'trace-to-trace')
+
+// Push-and-shove routing
+// Simple board: two traces that cross, requiring push-and-shove
+const psPlacements: PcbPlacement[] = [
+  { componentId: 'c1', name: 'C1', center: { x: 10, y: 40 }, w: 6, h: 4, rotationDeg: 0, pads: [] },
+  { componentId: 'c2', name: 'C2', center: { x: 40, y: 40 }, w: 6, h: 4, rotationDeg: 0, pads: [] },
+  { componentId: 'c3', name: 'C3', center: { x: 10, y: 10 }, w: 6, h: 4, rotationDeg: 0, pads: [] },
+  { componentId: 'c4', name: 'C4', center: { x: 40, y: 10 }, w: 6, h: 4, rotationDeg: 0, pads: [] }
+]
+
+const psPads: PcbPad[] = [
+  { componentId: 'c1', pinName: '1', center: { x: 7, y: 40 }, w: 2, h: 2 },
+  { componentId: 'c1', pinName: '2', center: { x: 13, y: 40 }, w: 2, h: 2 },
+  { componentId: 'c2', pinName: '1', center: { x: 37, y: 40 }, w: 2, h: 2 },
+  { componentId: 'c2', pinName: '2', center: { x: 43, y: 40 }, w: 2, h: 2 },
+  { componentId: 'c3', pinName: '1', center: { x: 7, y: 10 }, w: 2, h: 2 },
+  { componentId: 'c3', pinName: '2', center: { x: 13, y: 10 }, w: 2, h: 2 },
+  { componentId: 'c4', pinName: '1', center: { x: 37, y: 10 }, w: 2, h: 2 },
+  { componentId: 'c4', pinName: '2', center: { x: 43, y: 10 }, w: 2, h: 2 }
+]
+
+// Connections: c1:2 -> c2:1 (horizontal across top) AND c3:2 -> c4:1 (horizontal across bottom)
+// These don't cross, so all should route normally
+const psConnections = [
+  { net: 'NET_A', fromPin: psPads[0], toPin: psPads[2] },
+  { net: 'NET_B', fromPin: psPads[4], toPin: psPads[6] }
+]
+
+const psResult = routeTracesWithPushAndShove(
+  psConnections,
+  psPlacements,
+  100,
+  80,
+  1,
+  0.25
+)
+check('push-and-shove routes all connections on simple board', psResult.unrouted.length === 0)
+check('push-and-shove returns traces', psResult.traces.length === 2)
+
+// Board with crossing traces that require push-and-shove
+// c1:2 -> c4:2 (diagonal across board) AND c3:2 -> c2:1 (diagonal other way)
+// These two traces will cross in the middle, requiring push-and-shove
+const psConnections2 = [
+  { net: 'NET_X', fromPin: psPads[1], toPin: psPads[7] },
+  { net: 'NET_Y', fromPin: psPads[5], toPin: psPads[2] }
+]
+
+const psResult2 = routeTracesWithPushAndShove(
+  psConnections2,
+  psPlacements,
+  100,
+  80,
+  1,
+  0.25
+)
+check('push-and-shove attempts crossing traces', psResult2.traces.length >= 1)
+check('push-and-shove returns drc violations array', Array.isArray(psResult2.drcViolations))
+check('push-and-shove returns rippedUp array', Array.isArray(psResult2.rippedUp))
+
+// Differential-pair routing
+const dpFromPin: PcbPad = { componentId: 'c1', pinName: '1', center: { x: 10, y: 40 }, w: 2, h: 2 }
+const dpToPin: PcbPad = { componentId: 'c2', pinName: '1', center: { x: 40, y: 40 }, w: 2, h: 2 }
+const dpPair: DifferentialPair = { pNet: 'USB_P', nNet: 'USB_N', separationMm: 0.2, targetLengthMm: 40 }
+
+const dpResult = routeDifferentialPair(dpFromPin, dpToPin, dpPair, 100, 80, 1, 0.25)
+check('diff-pair routing returns P trace', dpResult.pTrace.points.length >= 2)
+check('diff-pair routing returns N trace', dpResult.nTrace.points.length >= 2)
+check('diff-pair not unrouted', dpResult.unrouted === false)
+check('diff-pair P and N have same point count', dpResult.pTrace.points.length === dpResult.nTrace.points.length)
+check('diff-pair length diff is finite', isFinite(dpResult.lengthDiffMm))
+
+// Length tuning: target longer than natural length should add meanders
+const dpLongPair: DifferentialPair = { pNet: 'USB_P', nNet: 'USB_N', separationMm: 0.2, targetLengthMm: 100 }
+const dpLongResult = routeDifferentialPair(dpFromPin, dpToPin, dpLongPair, 100, 80, 1, 0.25)
+check('length tuning increases trace points', dpLongResult.pTrace.points.length >= dpResult.pTrace.points.length)
+check('length tuning equalizes P and N lengths', dpLongResult.lengthDiffMm === 0)
+
+// IPC-2581 manufacturing output
+const ipc2581Xml = generateIpc2581(
+  'Test Board',
+  testPlacements,
+  testTraces,
+  testPads,
+  [],
+  100,
+  80,
+  1.6
+)
+check('IPC-2581 produces XML output', ipc2581Xml.length > 0)
+check('IPC-2581 has XML declaration', ipc2581Xml.startsWith('<?xml'))
+check('IPC-2581 has root element', ipc2581Xml.includes('<IPC2581>'))
+check('IPC-2581 has header', ipc2581Xml.includes('<Header>'))
+check('IPC-2581 has part list', ipc2581Xml.includes('<PartList>'))
+check('IPC-2581 has netlist', ipc2581Xml.includes('<Netlist>'))
+check('IPC-2581 has layer stackup', ipc2581Xml.includes('<LayerStackup>'))
+check('IPC-2581 has manufacturing attributes', ipc2581Xml.includes('<ManufacturingAttributes>'))
+check('IPC-2581 has closing tag', ipc2581Xml.endsWith('</IPC2581>\n'))
+
+// Annotation / ECO
+const testLinks: AnnotationLink[] = [
+  { componentId: 'c1', designator: 'C1', placementId: 'p1', footprintId: 'cap-0603', schematicNet: 'NET_1', pcbNet: 'NET_1' },
+  { componentId: 'r1', designator: 'R1', placementId: 'p2', footprintId: 'res-0603', schematicNet: 'NET_1', pcbNet: 'NET_1' },
+  { componentId: 'u1', designator: 'U1', placementId: null, footprintId: 'mcu-qfn-20', schematicNet: 'NET_2', pcbNet: null }
+]
+
+const links = buildAnnotationLinks(
+  {
+    components: [
+      { id: 'c1', name: 'C1', category: 'Passive', quantity: 1, pins: [], designator: 'C1', footprintId: 'cap-0603' },
+      { id: 'r1', name: 'R1', category: 'Passive', quantity: 1, pins: [], designator: 'R1', footprintId: 'res-0603' },
+      { id: 'u1', name: 'U1', category: 'Microcontroller', quantity: 1, pins: [], designator: 'U1', footprintId: 'mcu-qfn-20' }
+    ],
+    connections: [],
+    sheets: [],
+    hierarchicalBlocks: [],
+    footprints: [],
+    steps: [],
+    title: 'Test',
+    summary: '',
+    difficulty: 'beginner'
+  } as any,
+  new Map([['p1', 'C1'], ['p2', 'R1']])
+)
+check('buildAnnotationLinks returns links for all components', links.length === 3)
+check('linked component has placement', links[0].placementId === 'p1')
+check('unplaced component has null placement', links.some((l) => l.designator === 'U1' && l.placementId === null))
+
+const divergences = findDivergences(links, new Map([['p1', 'cap-0603']]), new Map([['p1', 'NET_1']]))
+check('findDivergences detects unplaced component', divergences.some((d) => d.type === 'unplaced' && d.designator === 'U1'))
+check('unplaced divergence is warning', divergences.find((d) => d.type === 'unplaced')!.severity === 'warning')
+
+const eco = generateEco(divergences)
+check('generateEco creates actions', eco.actions.length > 0)
+check('eco has place_component action', eco.actions.some((a) => a.type === 'place_component'))
+check('eco autoResolvable for place-only', eco.autoResolvable === true)
+
+const backwardDivs = backwardAnnotation(
+  [{ componentId: 'x1', designator: 'X1', footprintId: null, net: null }],
+  [{ id: 'c1', name: 'C1', category: 'Passive', quantity: 1, pins: [], designator: 'C1' }]
+)
+check('backwardAnnotation detects PCB-only component', backwardDivs.some((d) => d.type === 'component_added' && d.severity === 'error'))
 
 // Run all async collaboration tests, then print the summary.
 ;(async () => {

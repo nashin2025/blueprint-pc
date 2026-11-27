@@ -23,12 +23,20 @@ import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
 import { flattenHierarchy, expandBlockInPlace, validateBlock } from './hierarchical-design'
 import { getDrcRules, saveDrcRules } from './drc-rules'
-import { placeComponents, attachPads, routeTraces, checkTraceClearance } from './pcb-layout'
-import type { PcbPad, PcbVia, PcbTrace } from './pcb-layout'
+import { placeComponents, attachPads, routeTraces, checkTraceClearance, routeTracesWithPushAndShove, routeDifferentialPair } from './pcb-layout'
+import type { PcbPad, PcbVia, PcbTrace, DifferentialPair } from './pcb-layout'
 import { generateGerberFiles } from './gerber'
 import { generateLandPattern } from './footprint-generator'
 import { generatePickPlace, centroidToCsv } from './pickplace'
 import { generateStepBoard } from './step-export'
+import { generateIpc2581 } from './ipc2581'
+import {
+  buildAnnotationLinks,
+  findDivergences,
+  generateEco,
+  backwardAnnotation
+} from './annotation'
+import type { AnnotationLink, AnnotationDivergence } from './annotation'
 import { checkComponentClearance, checkBoardEdgeClearance } from './mech-clearance'
 import { collabServer } from './collaboration'
 import {
@@ -801,6 +809,107 @@ export function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('pcb:route-push-shove', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      const { spec } = project
+
+      const boardW = 100
+      const boardH = 80
+
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+      const allPads = placed.flatMap((p) => p.pads)
+
+      const routeConnections = spec.connections.map((conn) => ({
+        net: conn.net ?? 'NET_1',
+        fromPin: allPads.find((p) => p.componentId === conn.from.componentId && p.pinName === conn.from.pin)!,
+        toPin: allPads.find((p) => p.componentId === conn.to.componentId && p.pinName === conn.to.pin)!,
+      }))
+      const { traces, unrouted, drcViolations, rippedUp } = routeTracesWithPushAndShove(
+        routeConnections,
+        placed,
+        boardW,
+        boardH,
+        1,
+        0.25
+      )
+
+      return {
+        ok: true as const,
+        data: { traces, unrouted, drcViolations, rippedUp, boardW, boardH }
+      }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:route-differential-pair', async (_e, args: {
+    projectId: string
+    pNet: string
+    nNet: string
+    separationMm: number
+    targetLengthMm?: number
+    fromPin: { componentId: string; pinName: string }
+    toPin: { componentId: string; pinName: string }
+  }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const { spec } = project
+
+      const boardW = 100
+      const boardH = 80
+
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+      const allPads = placed.flatMap((p) => p.pads)
+
+      const fromPad = allPads.find((p) => p.componentId === args.fromPin.componentId && p.pinName === args.fromPin.pinName)
+      const toPad = allPads.find((p) => p.componentId === args.toPin.componentId && p.pinName === args.toPin.pinName)
+      if (!fromPad || !toPad) {
+        return { ok: false, error: 'From or to pad not found' }
+      }
+
+      const pair: DifferentialPair = {
+        pNet: args.pNet,
+        nNet: args.nNet,
+        separationMm: args.separationMm,
+        targetLengthMm: args.targetLengthMm
+      }
+
+      const { pTrace, nTrace, unrouted, lengthDiffMm } = routeDifferentialPair(
+        fromPad,
+        toPad,
+        pair,
+        boardW,
+        boardH,
+        1,
+        0.25
+      )
+
+      return {
+        ok: true as const,
+        data: { pTrace, nTrace, unrouted, lengthDiffMm }
+      }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
   ipcMain.handle('mech:clearance-check', async (_e, args: { projectId: string; clearance: number }) => {
     try {
       const project = store.get(args.projectId)
@@ -824,6 +933,111 @@ export function registerIpc(): void {
       const edgeClearance = checkBoardEdgeClearance(placed, boardW, boardH, clearance)
 
       return { ok: true as const, data: { componentClearance: compClearance, edgeClearance, clearance } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:export-ipc2581', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      const { spec } = project
+
+      const boardW = 100
+      const boardH = 80
+      const boardThickness = 1.6
+
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+      const allPads = placed.flatMap((p) => p.pads)
+
+      const routeConnections = spec.connections.map((conn) => ({
+        net: conn.net ?? 'NET_1',
+        fromPin: allPads.find((p) => p.componentId === conn.from.componentId && p.pinName === conn.from.pin)!,
+        toPin: allPads.find((p) => p.componentId === conn.to.componentId && p.pinName === conn.to.pin)!,
+      }))
+      const { traces } = routeTraces(routeConnections, placed, boardW, boardH, 1, 0.25)
+      const vias: PcbVia[] = []
+
+      const xml = generateIpc2581(
+        spec.title,
+        placed,
+        traces,
+        allPads,
+        vias,
+        boardW,
+        boardH,
+        boardThickness
+      )
+
+      return { ok: true as const, data: { xml } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('annotation:build-links', async (_e, args: {
+    projectId: string
+    placementDesignators: Array<{ placementId: string; designator: string }>
+  }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const placementMap = new Map(args.placementDesignators.map((d) => [d.placementId, d.designator]))
+      const links = buildAnnotationLinks(project.spec, placementMap)
+      return { ok: true as const, data: { links } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('annotation:find-divergences', async (_e, args: {
+    links: AnnotationLink[]
+    pcbFootprints: Array<{ placementId: string; footprintId: string }>
+    pcbNets: Array<{ placementId: string; net: string }>
+  }) => {
+    try {
+      const pcbFootprints = new Map(args.pcbFootprints.map((f) => [f.placementId, f.footprintId]))
+      const pcbNets = new Map(args.pcbNets.map((n) => [n.placementId, n.net]))
+      const divergences = findDivergences(args.links, pcbFootprints, pcbNets)
+      return { ok: true as const, data: { divergences } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('annotation:generate-eco', async (_e, args: {
+    divergences: AnnotationDivergence[]
+  }) => {
+    try {
+      const eco = generateEco(args.divergences)
+      return { ok: true as const, data: { eco } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('annotation:backward', async (_e, args: {
+    pcbPlacements: Array<{
+      componentId: string
+      designator: string
+      footprintId: string | null
+      net: string | null
+    }>
+    projectId: string
+  }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const divergences = backwardAnnotation(args.pcbPlacements, project.spec.components)
+      return { ok: true as const, data: { divergences } }
     } catch (err) {
       return fail(err)
     }

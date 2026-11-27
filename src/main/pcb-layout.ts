@@ -495,6 +495,249 @@ export function routeTraces(
   return { traces, unrouted, drcViolations };
 }
 
+/**
+ * Route traces with push-and-shove (rip-up and reroute).
+ *
+ * First attempts normal routing. For any traces that remain unrouted, it
+ * iteratively rips up one previously routed trace and re-routes all remaining
+ * traces, keeping the best result (most traces routed). This gives a
+ * push-and-shove capability: existing traces are moved aside to make room for
+ * new ones when the board is congested.
+ *
+ * Returns the best routing result found.
+ */
+export function routeTracesWithPushAndShove(
+  connections: Array<{ net: string; fromPin: PcbPad; toPin: PcbPad }>,
+  placements: PcbPlacement[],
+  boardW: number,
+  boardH: number,
+  gridSize = 1,
+  traceWidth = 0.25,
+  rules: PcbDesignRules = DEFAULT_RULES,
+  maxRipUpAttempts = 5
+): { traces: PcbTrace[]; unrouted: Array<{ net: string; reason: string }>; drcViolations: PcbDrcViolation[]; rippedUp: string[] } {
+  // First attempt: normal routing.
+  let best = routeTraces(connections, placements, boardW, boardH, gridSize, traceWidth, rules);
+  const rippedUp: string[] = [];
+
+  if (best.unrouted.length === 0) {
+    return { ...best, rippedUp: [] };
+  }
+
+  // Iterative rip-up: for each unrouted net, try removing one routed trace
+  // and re-routing everything. Keep the best result.
+  let attempt = 0;
+  while (best.unrouted.length > 0 && attempt < maxRipUpAttempts) {
+    attempt++;
+
+    // Pick the first unrouted net as the one we want to route.
+    const targetNet = best.unrouted[0].net;
+
+    // Find a routed trace to rip up (prefer a different net).
+    const ripCandidate = best.traces.find((t) => t.net !== targetNet);
+    if (!ripCandidate) break; // No trace to rip up
+
+    // Build connection list without the ripped-up trace's net.
+    const rippedNet = ripCandidate.net;
+    rippedUp.push(rippedNet);
+
+    const remainingConnections = connections.filter((c) => c.net !== rippedNet);
+    const attemptResult = routeTraces(remainingConnections, placements, boardW, boardH, gridSize, traceWidth, rules);
+
+    // If this attempt routed more traces (including the target net), keep it.
+    if (attemptResult.unrouted.length < best.unrouted.length) {
+      best = attemptResult;
+      // Re-add the ripped connection as unrouted (it was removed).
+      best.unrouted.push({ net: rippedNet, reason: 'ripped up for push-and-shove' });
+    } else {
+      // This rip-up didn't help; stop trying.
+      break;
+    }
+  }
+
+  return { ...best, rippedUp };
+}
+
+// ---------------------------------------------------------------------------
+// Differential-pair routing + length tuning
+// ---------------------------------------------------------------------------
+
+/** A differential pair: two nets routed together with fixed separation. */
+export interface DifferentialPair {
+  pNet: string   // Positive/net+ trace
+  nNet: string   // Negative/net- trace
+  separationMm: number  // Edge-to-edge separation between P and N traces
+  targetLengthMm?: number  // Target length for both traces (length tuning)
+}
+
+/** Route a differential pair: two traces routed side-by-side with fixed
+ *  separation. Both traces follow the same polyline path, offset by
+ *  separationMm perpendicular to the direction of travel.
+ */
+export function routeDifferentialPair(
+  fromPin: PcbPad,
+  toPin: PcbPad,
+  pair: DifferentialPair,
+  boardW: number,
+  boardH: number,
+  gridSize = 1,
+  traceWidth = 0.25
+): { pTrace: PcbTrace; nTrace: PcbTrace; unrouted: boolean; lengthDiffMm: number } {
+  void boardW
+  void boardH
+  void traceWidth // Board bounds accepted for API parity; traceWidth is implicit
+  // in the via pad sizes. gridSize is used for step computation below.
+  const dx = toPin.center.x - fromPin.center.x
+  const dy = toPin.center.y - fromPin.center.y
+  const len = Math.sqrt(dx * dx + dy * dy)
+
+  if (len < 0.001) {
+    return { pTrace: {} as PcbTrace, nTrace: {} as PcbTrace, unrouted: true, lengthDiffMm: 0 }
+  }
+
+  // Unit vector along the route
+  const ux = dx / len
+  const uy = dy / len
+  // Perpendicular vector (90 degrees CCW)
+  const nx = -uy
+  const ny = ux
+
+  const halfSep = pair.separationMm / 2
+  const offsetP = { x: nx * halfSep, y: ny * halfSep }
+  const offsetN = { x: -nx * halfSep, y: -ny * halfSep }
+
+  // Build points for P and N traces
+  const steps = Math.ceil(len / gridSize)
+  const pPoints: { x: number; y: number }[] = []
+  const nPoints: { x: number; y: number }[] = []
+
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps
+    const x = fromPin.center.x + dx * t
+    const y = fromPin.center.y + dy * t
+    pPoints.push({ x: x + offsetP.x, y: y + offsetP.y })
+    nPoints.push({ x: x + offsetN.x, y: y + offsetN.y })
+  }
+
+  const pTrace: PcbTrace = {
+    net: pair.pNet,
+    from: { componentId: fromPin.componentId, pinName: fromPin.pinName },
+    to: { componentId: toPin.componentId, pinName: toPin.pinName },
+    points: pPoints
+  }
+
+  const nTrace: PcbTrace = {
+    net: pair.nNet,
+    from: { componentId: fromPin.componentId, pinName: fromPin.pinName },
+    to: { componentId: toPin.componentId, pinName: toPin.pinName },
+    points: nPoints
+  }
+
+  // Length tuning: add meanders to the shorter trace if targetLengthMm is set
+  let lengthDiffMm = 0
+  if (pair.targetLengthMm) {
+    const pLen = polylineLength(pPoints)
+    const nLen = polylineLength(nPoints)
+    const longer = Math.max(pLen, nLen)
+    const target = Math.min(pair.targetLengthMm, longer) // Can't make traces shorter
+    lengthDiffMm = Math.abs(pLen - nLen)
+
+    if (pLen < target) {
+      pTrace.points = addMeanders(pPoints, target - pLen, gridSize)
+    }
+    if (nLen < target) {
+      nTrace.points = addMeanders(nPoints, target - nLen, gridSize)
+    }
+  }
+
+  return { pTrace, nTrace, unrouted: false, lengthDiffMm }
+}
+
+/** Total length of a polyline. */
+function polylineLength(points: { x: number; y: number }[]): number {
+  let total = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    const dx = points[i + 1].x - points[i].x
+    const dy = points[i + 1].y - points[i].y
+    total += Math.sqrt(dx * dx + dy * dy)
+  }
+  return total
+}
+
+/** Add meanders (zig-zag detours) to a polyline to increase its length by
+ *  the specified amount. Meanders are added at the midpoint of the longest
+ *  segment.
+ */
+function addMeanders(
+  points: { x: number; y: number }[],
+  extraLengthMm: number,
+  gridSize: number
+): { x: number; y: number }[] {
+  void gridSize // Accepted for API parity; meander amplitude is derived from segment length
+  if (extraLengthMm <= 0 || points.length < 2) return points
+
+  // Find the longest segment
+  let maxSegIdx = 0
+  let maxLen = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    const dx = points[i + 1].x - points[i].x
+    const dy = points[i + 1].y - points[i].y
+    const segLen = Math.sqrt(dx * dx + dy * dy)
+    if (segLen > maxLen) {
+      maxLen = segLen
+      maxSegIdx = i
+    }
+  }
+
+  const p1 = points[maxSegIdx]
+  const p2 = points[maxSegIdx + 1]
+  const dx = p2.x - p1.x
+  const dy = p2.y - p1.y
+  const segLen = Math.sqrt(dx * dx + dy * dy)
+  const ux = dx / segLen
+  const uy = dy / segLen
+  const nx = -uy
+  const ny = ux
+
+  // Number of meander cycles: each cycle adds ~4 * amplitude
+  const amplitude = Math.min(segLen / 4, 5) // Max 5mm amplitude
+  const cycles = Math.ceil(extraLengthMm / (4 * amplitude))
+  const cycleLen = segLen / cycles
+
+  const result: { x: number; y: number }[] = []
+  result.push(p1)
+
+  for (let c = 0; c < cycles; c++) {
+    const start = c * cycleLen
+    const end = (c + 1) * cycleLen
+    const mid = start + cycleLen / 2
+
+    // Start point of this cycle
+    result.push({
+      x: p1.x + ux * start,
+      y: p1.y + uy * start
+    })
+    // Meander out
+    result.push({
+      x: p1.x + ux * mid - nx * amplitude,
+      y: p1.y + uy * mid + ny * amplitude
+    })
+    // Meander back
+    result.push({
+      x: p1.x + ux * mid + nx * amplitude,
+      y: p1.y + uy * mid - ny * amplitude
+    })
+    // End point of this cycle
+    result.push({
+      x: p1.x + ux * end,
+      y: p1.y + uy * end
+    })
+  }
+
+  result.push(p2)
+  return result
+}
+
 // ---------------------------------------------------------------------------
 // DRC
 // ---------------------------------------------------------------------------

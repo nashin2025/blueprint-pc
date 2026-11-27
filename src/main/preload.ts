@@ -82,6 +82,23 @@ const api = {
   pcbExportStep: (projectId: string): Promise<IpcResult<{ step: string; boardW: number; boardH: number; boardThickness: number }>> =>
     ipcRenderer.invoke('pcb:export-step', projectId),
 
+  pcbExportIpc2581: (projectId: string): Promise<IpcResult<{ xml: string }>> =>
+    ipcRenderer.invoke('pcb:export-ipc2581', projectId),
+
+  pcbRoutePushShove: (projectId: string): Promise<IpcResult<unknown>> =>
+    ipcRenderer.invoke('pcb:route-push-shove', projectId),
+
+  pcbRouteDifferentialPair: (args: {
+    projectId: string
+    pNet: string
+    nNet: string
+    separationMm: number
+    targetLengthMm?: number
+    fromPin: { componentId: string; pinName: string }
+    toPin: { componentId: string; pinName: string }
+  }): Promise<IpcResult<unknown>> =>
+    ipcRenderer.invoke('pcb:route-differential-pair', args),
+
   mechCheckClearance: (args: { projectId: string; clearance: number }): Promise<IpcResult<{
     componentClearance: Array<{ componentId1: string; componentId2: string; distance: number; clearance: number; violation: boolean }>
     edgeClearance: Array<{ componentId: string; distance: number; clearance: number; violation: boolean }>
@@ -260,6 +277,64 @@ const api = {
     ipcRenderer.invoke('hierarchical:get-block', args),
   hierarchicalFlatten: (projectId: string): Promise<IpcResult<{ project: Project }>> =>
     ipcRenderer.invoke('hierarchical:flatten', projectId),
+
+  // Annotation / ECO
+  annotationBuildLinks: (args: {
+    projectId: string
+    placementDesignators: Array<{ placementId: string; designator: string }>
+  }): Promise<IpcResult<{ links: Array<{
+    componentId: string
+    designator: string
+    placementId: string | null
+    footprintId: string | null
+    schematicNet: string | null
+    pcbNet: string | null
+  }> }>> =>
+    ipcRenderer.invoke('annotation:build-links', args),
+  annotationFindDivergences: (args: {
+    links: Array<{
+      componentId: string
+      designator: string
+      placementId: string | null
+      footprintId: string | null
+      schematicNet: string | null
+      pcbNet: string | null
+    }>
+    pcbFootprints: Array<{ placementId: string; footprintId: string }>
+    pcbNets: Array<{ placementId: string; net: string }>
+  }): Promise<IpcResult<{ divergences: Array<{
+    type: string
+    componentId: string
+    designator: string
+    message: string
+    severity: string
+  }> }>> =>
+    ipcRenderer.invoke('annotation:find-divergences', args),
+  annotationGenerateEco: (args: {
+    divergences: Array<{
+      type: string
+      componentId: string
+      designator: string
+      message: string
+      severity: string
+    }>
+  }): Promise<IpcResult<{ eco: { id: string; createdAt: number; actions: Array<{
+    type: string
+    designator: string
+    newValue: string | null
+    oldValue: string | null
+  }>; divergences: Array<{ type: string; componentId: string; designator: string; message: string; severity: string }>; autoResolvable: boolean } }>> =>
+    ipcRenderer.invoke('annotation:generate-eco', args),
+  annotationBackward: (args: {
+    pcbPlacements: Array<{
+      componentId: string
+      designator: string
+      footprintId: string | null
+      net: string | null
+    }>
+    projectId: string
+  }): Promise<IpcResult<{ divergences: Array<{ type: string; componentId: string; designator: string; message: string; severity: string }> }>> =>
+    ipcRenderer.invoke('annotation:backward', args),
 
   // Footprints
   footprintsAdd: (args: { projectId: string; footprint: Footprint }): Promise<IpcResult<{ project: Project }>> =>
