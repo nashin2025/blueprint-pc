@@ -1,4 +1,5 @@
 import { dialog, ipcMain, shell } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { store } from './store'
 import { loadSettings, saveSettings } from './settings'
 import { requestDesign, LlmError, listNvidiaModels } from './ai/llm'
@@ -113,6 +114,50 @@ export function registerIpc(): void {
 
   ipcMain.handle('projects:import', async (_e, zipPath: string) => {
     return await extractBundle(zipPath)
+  })
+
+  ipcMain.handle('projects:export-spec', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      const specJson = JSON.stringify(project.spec, null, 2)
+      return { ok: true as const, data: { spec: specJson } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('projects:import-spec', async (_e, args: { spec: string }) => {
+    try {
+      const spec: DesignSpec = JSON.parse(args.spec)
+      // Validate minimal structure
+      if (!spec.title || !spec.components || !spec.connections || !spec.steps) {
+        return { ok: false, error: 'Invalid spec: missing title, components, connections, or steps' }
+      }
+      const project: Project = {
+        id: randomUUID(),
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        archived: false,
+        spec,
+        chat: [],
+        versions: []
+      }
+      store.save(project)
+      return { ok: true as const, data: { project } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('projects:read-file', async (_e, filePath: string) => {
+    try {
+      const { readFileSync } = await import('node:fs')
+      const content = readFileSync(filePath, 'utf-8')
+      return { ok: true as const, data: { content } }
+    } catch (err) {
+      return fail(err)
+    }
   })
 
   ipcMain.handle('cart:getOrCreate', async (_e, projectId: string) => {

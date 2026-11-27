@@ -16,8 +16,15 @@
  *   - trace-to-pad: a trace closer than padToTraceClearance to a pad (error)
  */
 
-import type { DesignSpec, PcbDesignRules } from '../shared/types.ts'
-import { DEFAULT_PCB_RULES } from '../shared/types.ts'
+import type { DesignSpec, PcbDesignRules } from '../shared/types'
+
+const DEFAULT_PCB_RULES: PcbDesignRules = {
+  traceWidth: 0.2,
+  traceClearance: 0.2,
+  padToTraceClearance: 0.2,
+  viaToTraceClearance: 0.2,
+  minAnnularRing: 0.1
+}
 
 export interface Point {
   x: number

@@ -39,6 +39,15 @@ const api = {
   importProject: (zipPath: string): Promise<string> =>
     ipcRenderer.invoke('projects:import', zipPath),
 
+  projectsExportSpec: (projectId: string): Promise<IpcResult<{ spec: string }>> =>
+    ipcRenderer.invoke('projects:export-spec', projectId),
+
+  projectsImportSpec: (args: { spec: string }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('projects:import-spec', args),
+
+  projectsReadFile: (filePath: string): Promise<IpcResult<{ content: string }>> =>
+    ipcRenderer.invoke('projects:read-file', filePath),
+
   loadSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: AppSettings): Promise<AppSettings> =>
     ipcRenderer.invoke('settings:save', settings),

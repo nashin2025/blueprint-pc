@@ -104,6 +104,36 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
     }
   }
 
+  async function exportSpec() {
+    const res = await window.api.projectsExportSpec(project.id)
+    if (res.ok && res.data) {
+      const blob = new Blob([res.data.spec], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${spec.title.replace(/[^a-z0-9]/gi, '_')}_spec.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
+  }
+
+  async function importSpec() {
+    const picker = await window.api.openFilePicker()
+    if (picker.canceled || !picker.filePath) return
+    try {
+      const readRes = await window.api.projectsReadFile(picker.filePath)
+      if (!readRes.ok || !readRes.data) return
+      const res = await window.api.projectsImportSpec({ spec: readRes.data.content })
+      if (res.ok && res.data) {
+        window.location.href = `/project/${res.data.project.id}`
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
   async function saveVersion() {
     const label = prompt('Version name', `Version ${Date.now()}`)
     if (!label) return
@@ -260,6 +290,26 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
                     >
                       <DownloadIcon size={14} />
                       Netlist (.net)
+                    </button>
+                    <button
+                      onClick={() => {
+                        exportSpec()
+                        setMenuOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] text-ink transition hover:bg-surface-2"
+                    >
+                      <DownloadIcon size={14} />
+                      Design spec (.json)
+                    </button>
+                    <button
+                      onClick={() => {
+                        importSpec()
+                        setMenuOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] text-ink transition hover:bg-surface-2"
+                    >
+                      <DownloadIcon size={14} />
+                      Import spec (.json)
                     </button>
                     <button
                       onClick={() => {
