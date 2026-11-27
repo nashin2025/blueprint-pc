@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS cart_items (
   component_id   TEXT NOT NULL REFERENCES project_components(id) ON DELETE CASCADE,
   quantity       INTEGER NOT NULL DEFAULT 1,
   retailer_url   TEXT,
+  lead_time_days INTEGER,
   added_at       INTEGER NOT NULL,
   FOREIGN KEY (cart_id) REFERENCES carts(id) ON DELETE CASCADE
 );
@@ -204,6 +205,12 @@ function migrate(db: Database.Database): void {
   const projCols = db.prepare("PRAGMA table_info(projects)").all() as { name: string }[]
   if (!projCols.some((c) => c.name === 'archived')) {
     db.exec('ALTER TABLE projects ADD COLUMN archived INTEGER NOT NULL DEFAULT 0')
+  }
+
+  // Add lead_time_days column to cart_items if missing
+  const cartItemCols = db.prepare("PRAGMA table_info(cart_items)").all() as { name: string }[]
+  if (!cartItemCols.some((c) => c.name === 'lead_time_days')) {
+    db.exec('ALTER TABLE cart_items ADD COLUMN lead_time_days INTEGER')
   }
 
   // Create cart tables if missing
@@ -685,7 +692,7 @@ export function getOrCreateCart(projectId: string): { id: string; createdAt: num
 }
 
 /** Add a component to the cart. If already present, increment quantity. */
-export function addToCart(cartId: string, componentId: string, quantity = 1, retailerUrl?: string): void {
+export function addToCart(cartId: string, componentId: string, quantity = 1, retailerUrl?: string, leadTimeDays?: number): void {
   const conn = database()
   const now = Date.now()
 
@@ -702,14 +709,15 @@ export function addToCart(cartId: string, componentId: string, quantity = 1, ret
     ).run(quantity, now, existing.id)
   } else {
     conn.prepare(
-      `INSERT INTO cart_items (id, cart_id, component_id, quantity, retailer_url, added_at)
-       VALUES (@id, @cartId, @componentId, @quantity, @retailerUrl, @addedAt)`
+      `INSERT INTO cart_items (id, cart_id, component_id, quantity, retailer_url, lead_time_days, added_at)
+       VALUES (@id, @cartId, @componentId, @quantity, @retailerUrl, @leadTimeDays, @addedAt)`
     ).run({
       id: `${cartId}_item_${Date.now()}`,
       cartId,
       componentId,
       quantity,
       retailerUrl: retailerUrl ?? null,
+      leadTimeDays: leadTimeDays ?? null,
       addedAt: now
     })
   }
@@ -741,6 +749,7 @@ export interface CartItem {
   addedAt: number
   unitPrice: number | null
   unitPriceCurrency: string
+  leadTimeDays: number | null
 }
 
 export function listCartItems(cartId: string): CartItem[] {
@@ -748,11 +757,11 @@ export function listCartItems(cartId: string): CartItem[] {
   const rows = conn
     .prepare(
       `SELECT ci.id, ci.component_id, pc.name, pc.part_name, pc.unit_price, pc.unit_price_currency,
-              ci.quantity, ci.retailer_url, ci.added_at
-       FROM cart_items ci
-       JOIN project_components pc ON ci.component_id = pc.id
-       WHERE ci.cart_id = ?
-       ORDER BY ci.added_at`
+              ci.quantity, ci.retailer_url, ci.lead_time_days, ci.added_at
+        FROM cart_items ci
+        JOIN project_components pc ON ci.component_id = pc.id
+        WHERE ci.cart_id = ?
+        ORDER BY ci.added_at`
     )
     .all(cartId) as Array<{
     id: string
@@ -764,6 +773,7 @@ export function listCartItems(cartId: string): CartItem[] {
     quantity: number
     retailer_url: string | null
     added_at: number
+    lead_time_days: number | null
   }>
 
   return rows.map((r) => ({
@@ -775,7 +785,8 @@ export function listCartItems(cartId: string): CartItem[] {
     retailerUrl: r.retailer_url,
     addedAt: r.added_at,
     unitPrice: r.unit_price,
-    unitPriceCurrency: r.unit_price_currency
+    unitPriceCurrency: r.unit_price_currency,
+    leadTimeDays: r.lead_time_days
   }))
 }
 
@@ -783,14 +794,16 @@ export function listCartItems(cartId: string): CartItem[] {
 export function exportCart(cartId: string): string {
   const items = listCartItems(cartId)
   const lines = [
-    'Component,Part Name,Quantity,Unit Price,Currency,Retailer URL,Added At'
+    'Component,Part Name,Quantity,Unit Price,Currency,Lead Time (Days),Line Cost (USD),Retailer URL,Added At'
   ]
   for (const item of items) {
     const added = new Date(item.addedAt).toISOString()
+    const unitPriceUsd = item.unitPrice ?? 0
+    const lineCostUsd = (unitPriceUsd * item.quantity).toFixed(2)
     lines.push(
       `"${item.componentName}","${item.componentPartName ?? ''}",${item.quantity},${
         item.unitPrice ?? ''
-      },"${item.unitPriceCurrency}","${item.retailerUrl ?? ''}","${added}"`
+      },"${item.unitPriceCurrency}","${item.leadTimeDays ?? ''}","${lineCostUsd}","${item.retailerUrl ?? ''}","${added}"`
     )
   }
   return lines.join('\n') + '\n'

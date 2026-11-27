@@ -288,6 +288,8 @@ export interface CartItem {
   addedAt: number
   unitPrice: number | null
   unitPriceCurrency: string
+  /** Supplier lead time in days, set by the user when adding a part to cart. */
+  leadTimeDays: number | null
 }
 
 /** A DRC violation found during design rule checking. */

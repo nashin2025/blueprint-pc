@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { CartItem } from '@shared/types'
+import { toUsd } from '@shared/money'
 import { CartIcon, TrashIcon } from '../components/Icons'
 
 interface CartDrawerProps {
@@ -121,11 +122,17 @@ export default function CartDrawer({ open, onClose, projectId }: CartDrawerProps
                       <span className="text-sm font-medium truncate">{item.componentName}</span>
                       <span className="ml-auto text-[11px] font-mono text-ink-dim">{item.unitPriceCurrency.toUpperCase()} {item.unitPrice?.toFixed(2) ?? '—'}</span>
                     </div>
+                    {item.unitPrice && (
+                      <span className="text-[11px] font-mono text-ink-dim">Line: {toUsd(item.unitPrice, item.unitPriceCurrency)?.toFixed(2) ?? '—'} USD</span>
+                    )}
                     {item.componentPartName && (
                       <span className="text-[11px] text-ink-faint">{item.componentPartName}</span>
                     )}
                     <div className="mt-1 flex items-center gap-2">
                       <span className="text-[11px] text-ink-faint">Qty {item.quantity}</span>
+                      {item.leadTimeDays !== null && item.leadTimeDays !== undefined && (
+                        <span className="text-[11px] text-ink-faint">· Lead time {item.leadTimeDays} days</span>
+                      )}
                       {item.retailerUrl && (
                         <a
                           href={item.retailerUrl}
@@ -157,6 +164,29 @@ export default function CartDrawer({ open, onClose, projectId }: CartDrawerProps
             <div className="text-sm font-semibold">
               {items.reduce((sum, i) => sum + i.quantity, 0)}
             </div>
+            {items.some((i) => i.unitPrice) && (
+              <>
+                <div className="text-[11px] text-ink-faint">Grand total</div>
+                <div className="text-sm font-semibold text-ink">
+                  {items
+                    .map((i) => (i.unitPrice ? i.unitPrice * i.quantity : 0))
+                    .reduce((sum, v) => sum + v, 0)
+                    .toFixed(2)} USD
+                </div>
+              </>
+            )}
+            {items.some((i) => i.leadTimeDays !== null && i.leadTimeDays !== undefined) && (
+              <>
+                <div className="text-[11px] text-ink-faint">Project lead time</div>
+                <div className="text-sm font-semibold text-ink">
+                  {Math.max(
+                    ...items
+                      .filter((i) => i.leadTimeDays !== null && i.leadTimeDays !== undefined)
+                      .map((i) => i.leadTimeDays!)
+                  )} days
+                </div>
+              </>
+            )}
           </div>
           <div className="flex gap-2">
             <button

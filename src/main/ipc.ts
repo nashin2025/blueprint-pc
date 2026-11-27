@@ -7,7 +7,7 @@ import { generateImage, generateSummary } from './ai/info'
 import { loadImageDataUrl, saveImage } from './images'
 import { resolvePartImage } from './partimages'
 import { getOffers } from './offers'
-import { addToCart, clearCart, exportCart, getOrCreateCart, listCartItems, removeFromCart } from './db'
+import { addToCart, clearCart, database, exportCart, getOrCreateCart, listCartItems, removeFromCart } from './db'
 import { countParts, getPart, lookupModel, searchParts, saveModelFilePathByUrl, savePart, staleParts } from './catalogue/db'
 import { lastSyncAt, runSync, syncStatus, fetchPart } from './sync/schematik'
 import { cadDiscoveryStatus, runCadDiscovery } from './sync/cad-discovery'
@@ -121,9 +121,9 @@ export function registerIpc(): void {
     }
   })
 
-  ipcMain.handle('cart:add', async (_e, args: { cartId: string; componentId: string; quantity?: number; retailerUrl?: string }) => {
+  ipcMain.handle('cart:add', async (_e, args: { cartId: string; componentId: string; quantity?: number; retailerUrl?: string; leadTimeDays?: number }) => {
     try {
-      addToCart(args.cartId, args.componentId, args.quantity ?? 1, args.retailerUrl)
+      addToCart(args.cartId, args.componentId, args.quantity ?? 1, args.retailerUrl, args.leadTimeDays)
       return { ok: true as const }
     } catch (err) {
       return fail(err)
@@ -159,6 +159,18 @@ export function registerIpc(): void {
   ipcMain.handle('cart:export', async (_e, cartId: string) => {
     try {
       return { ok: true as const, data: exportCart(cartId) }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('cart:set-lead-time', async (_e, args: { cartId: string; componentId: string; leadTimeDays: number }) => {
+    try {
+      const conn = database()
+      conn.prepare(
+        'UPDATE cart_items SET lead_time_days = ? WHERE cart_id = ? AND component_id = ?'
+      ).run(args.leadTimeDays, args.cartId, args.componentId)
+      return { ok: true as const }
     } catch (err) {
       return fail(err)
     }
