@@ -44,6 +44,7 @@ import {
   simulateDc,
   simulateTransient,
 } from '../src/main/circuit-sim.ts'
+import { buildNetlist } from '../src/main/netlist.ts'
 
 let failures = 0
 let checks = 0
@@ -846,6 +847,69 @@ check('Circuit: floating node voltages near 0', Math.abs(floatingDc.nodeVoltages
 // Empty circuit handling.
 const emptyDc = simulateDc({ components: [], connections: [] })
 check('Circuit: empty circuit handled gracefully', emptyDc.converged === true)
+
+// ---------------------------------------------------------------------------
+// Netlist export
+// ---------------------------------------------------------------------------
+
+const netlistSpec = {
+  title: 'Netlist test',
+  summary: 'A design to test netlist export.',
+  difficulty: 'beginner' as const,
+  components: [
+    { id: 'c1', name: 'Resistor', category: 'Resistor', quantity: 1, pins: ['1', '2'] },
+    { id: 'c2', name: 'LED', category: 'LED', quantity: 1, pins: ['A', 'K'] },
+    { id: 'c3', name: 'Source', category: 'Power', quantity: 1, pins: ['+', '-'] }
+  ],
+  connections: [
+    { id: 'w1', from: { componentId: 'c3', pin: '+' }, to: { componentId: 'c1', pin: '1' }, kind: 'power', net: '5V' },
+    { id: 'w2', from: { componentId: 'c1', pin: '2' }, to: { componentId: 'c2', pin: 'A' }, kind: 'signal', net: 'SIG' },
+    { id: 'w3', from: { componentId: 'c2', pin: 'K' }, to: { componentId: 'c3', pin: '-' }, kind: 'ground', net: 'GND' }
+  ],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const netlist = buildNetlist(netlistSpec)
+check('Netlist: has header', netlist.includes('# Blueprint PC netlist'))
+check('Netlist: has format comment', netlist.includes('# Format: NET:<net_name>'))
+check('Netlist: has 5V net', netlist.includes('NET:5V'))
+check('Netlist: has SIG net', netlist.includes('NET:SIG'))
+check('Netlist: has GND net', netlist.includes('NET:GND'))
+check('Netlist: 5V net contains c3:+ and c1:1', netlist.includes('c3:+') && netlist.includes('c1:1'))
+check('Netlist: SIG net contains c1:2 and c2:A', netlist.includes('c1:2') && netlist.includes('c2:A'))
+check('Netlist: GND net contains c2:K and c3:-', netlist.includes('c2:K') && netlist.includes('c3:-'))
+check('Netlist: each pin appears once per net', (netlist.match(/c1:1/g) || []).length === 1)
+
+// Connections without a net name get auto-generated NET_N names.
+const noNetSpec = {
+  title: 'No net test',
+  summary: 'Connections without net names.',
+  difficulty: 'beginner' as const,
+  components: [
+    { id: 'c1', name: 'A', category: 'Resistor', quantity: 1, pins: ['1', '2'] },
+    { id: 'c2', name: 'B', category: 'Resistor', quantity: 1, pins: ['1', '2'] }
+  ],
+  connections: [
+    { id: 'w1', from: { componentId: 'c1', pin: '1' }, to: { componentId: 'c2', pin: '1' }, kind: 'signal' }
+  ],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const noNetList = buildNetlist(noNetSpec)
+check('Netlist: auto-generates NET name for connection without net', noNetList.includes('NET_1'))
+
+// Empty connections produce empty netlist (just header).
+const emptySpec = {
+  title: 'Empty test',
+  summary: 'No connections.',
+  difficulty: 'beginner' as const,
+  components: [],
+  connections: [],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const emptyNetlist = buildNetlist(emptySpec)
+check('Netlist: empty connections produces header only', emptyNetlist.includes('# Blueprint PC netlist') && !/^NET:/m.test(emptyNetlist))
 
 // ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)

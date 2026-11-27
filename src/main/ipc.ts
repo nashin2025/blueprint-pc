@@ -19,6 +19,7 @@ import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
 import type { AppSettings, DesignSpec, GenerateRequest, InfoRequest, Project } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
+import { buildNetlist } from './netlist'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -171,6 +172,16 @@ export function registerIpc(): void {
         'UPDATE cart_items SET lead_time_days = ? WHERE cart_id = ? AND component_id = ?'
       ).run(args.leadTimeDays, args.cartId, args.componentId)
       return { ok: true as const }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('design:export-netlist', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      return { ok: true as const, data: { netlist: buildNetlist(project.spec) } }
     } catch (err) {
       return fail(err)
     }

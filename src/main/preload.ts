@@ -139,7 +139,10 @@ const api = {
   designRestoreVersion: (args: { projectId: string; versionId: string }): Promise<IpcResult<Project>> =>
     ipcRenderer.invoke('design:restore-version', args),
   designDiffVersions: (args: { projectId: string; versionId1: string; versionId2: string }): Promise<IpcResult<{ diff: any; v1: DesignVersion; v2: DesignVersion }>> =>
-    ipcRenderer.invoke('design:diff-versions', args)
+    ipcRenderer.invoke('design:diff-versions', args),
+
+  designExportNetlist: (projectId: string): Promise<IpcResult<{ netlist: string }>> =>
+    ipcRenderer.invoke('design:export-netlist', projectId)
 }
 
 export type Bridge = typeof api
