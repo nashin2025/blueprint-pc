@@ -1468,6 +1468,62 @@ check('analyseTrace returns impedance result', analysed.impedance.z0Ohms > 0)
 check('analyseTrace tolerance is non-negative', analysed.tolerancePercent >= 0)
 check('analyseTrace withinTolerance is boolean', typeof analysed.withinTolerance === 'boolean')
 
+// ---------------------------------------------------------------------------
+// Thermal self-checks
+// ---------------------------------------------------------------------------
+
+import {
+  powerFromVoltageCurrent,
+  powerFromCurrentResistance,
+  powerFromVoltageResistance,
+  junctionTemperature,
+  maxPower,
+  analyseComponent,
+  packageRjaCPerW
+} from '../src/main/thermal.ts'
+
+// Power dissipation formulas
+check('P = V * I gives correct power', Math.abs(powerFromVoltageCurrent(5.0, 0.5) - 2.5) < 0.001)
+check('P = I^2 * R gives correct power', Math.abs(powerFromCurrentResistance(0.5, 10.0) - 2.5) < 0.001)
+check('P = V^2 / R gives correct power', Math.abs(powerFromVoltageResistance(5.0, 10.0) - 2.5) < 0.001)
+
+// Thermal resistance lookup
+check('SOP-8 has known RJA', packageRjaCPerW('sop-8') > 0)
+check('QFN-20 has lower RJA than SOP-8', packageRjaCPerW('qfn-20') < packageRjaCPerW('sop-8'))
+check('unknown package falls back to default', packageRjaCPerW('weird-package') === packageRjaCPerW('default'))
+
+// Junction temperature: Tj = Ta + Pd * Rja
+const tj = junctionTemperature(25, 1.0, 100)
+check('junction temp is ambient + power * RJA', Math.abs(tj - 125) < 0.001)
+check('junction temp above ambient', tj > 25)
+
+// Maximum power: Pd_max = (Tj_max - Ta) / Rja
+const pdMax = maxPower(25, 150, 100)
+check('max power formula', Math.abs(pdMax - 1.25) < 0.001)
+check('max power is zero when ambient >= TjMax', maxPower(150, 150, 100) === 0)
+
+// Component thermal analysis
+const thermal = analyseComponent({
+  ambientC: 25,
+  powerW: 0.5,
+  tJMaxC: 150,
+  packageType: 'sop-8'
+})
+check('thermal junction temperature is number', typeof thermal.junctionTemperatureC === 'number')
+check('thermal max power is positive', thermal.maxAllowablePowerW > 0)
+check('thermal derating is between 0 and 1', thermal.deratingFactor >= 0 && thermal.deratingFactor <= 1)
+check('thermal status is valid', ['ok', 'warning', 'critical'].includes(thermal.status))
+check('thermal withinLimits is boolean', typeof thermal.withinLimits === 'boolean')
+
+// High power leads to critical status
+const thermalHot = analyseComponent({
+  ambientC: 25,
+  powerW: 1.0,
+  tJMaxC: 100,
+  packageType: 'sop-8'
+})
+check('high power gives critical status', thermalHot.status === 'critical')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()

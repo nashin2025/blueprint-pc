@@ -34,6 +34,12 @@ import {
   reflectionCoefficient,
   propagationDelayNs
 } from './signal-integrity'
+import {
+  analyseComponent,
+  boardTemperatureRise,
+  powerFromCurrentResistance,
+  powerFromVoltageCurrent
+} from './thermal'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -816,6 +822,55 @@ export function registerIpc(): void {
     try {
       const delay = propagationDelayNs(args.effectiveEr, args.lengthMm)
       return { ok: true as const, data: { delayNs: delay } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Thermal analysis
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('thermal:analyse-component', async (_e, args: {
+    ambientC: number
+    powerW: number
+    tJMaxC: number
+    packageType: string
+  }) => {
+    try {
+      const result = analyseComponent(args)
+      return { ok: true as const, data: { result } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('thermal:power-from-vi', async (_e, args: { voltageV: number; currentA: number }) => {
+    try {
+      const power = powerFromVoltageCurrent(args.voltageV, args.currentA)
+      return { ok: true as const, data: { powerW: power } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('thermal:power-from-ir', async (_e, args: { currentA: number; resistanceOhm: number }) => {
+    try {
+      const power = powerFromCurrentResistance(args.currentA, args.resistanceOhm)
+      return { ok: true as const, data: { powerW: power } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('thermal:board-temperature', async (_e, args: {
+    ambientC: number
+    totalPowerW: number
+    boardRjaCPerW: number
+  }) => {
+    try {
+      const boardTemp = boardTemperatureRise(args.ambientC, args.totalPowerW, args.boardRjaCPerW)
+      return { ok: true as const, data: { boardTemperatureC: boardTemp, temperatureRiseC: boardTemp - args.ambientC } }
     } catch (err) {
       return fail(err)
     }

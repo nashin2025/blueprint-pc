@@ -538,6 +538,56 @@ export interface SiTraceResult {
   tolerancePercent: number
 }
 
+// ---------------------------------------------------------------------------
+// Thermal analysis
+// ---------------------------------------------------------------------------
+
+/** Thermal analysis request for a component. */
+export interface ComponentThermal {
+  /** Ambient temperature in Celsius. */
+  ambientC: number
+  /** Power dissipation in Watts. */
+  powerW: number
+  /** Maximum junction temperature in Celsius (from datasheet). */
+  tJMaxC: number
+  /** Package type for thermal resistance lookup (e.g. 'sop-8', 'qfn-20', 'to-220'). */
+  packageType: string
+}
+
+/** Thermal analysis result for a component. */
+export interface ThermalResult {
+  /** Estimated junction temperature in Celsius. */
+  junctionTemperatureC: number
+  /** Maximum allowable power dissipation in Watts. */
+  maxAllowablePowerW: number
+  /** Derating factor: actual power / max power (0 to 1+). */
+  deratingFactor: number
+  /** Junction-to-ambient thermal resistance in C/W. */
+  rjaCPerW: number
+  /** Status: 'ok', 'warning', or 'critical'. */
+  status: 'ok' | 'warning' | 'critical'
+  /** True when junction temperature is within limits. */
+  withinLimits: boolean
+}
+
+/** Board-level thermal estimate request. */
+export interface BoardThermal {
+  /** Ambient temperature in Celsius. */
+  ambientC: number
+  /** Total board power dissipation in Watts. */
+  totalPowerW: number
+  /** Board thermal resistance in C/W. */
+  boardRjaCPerW: number
+}
+
+/** Board-level thermal estimate result. */
+export interface BoardThermalResult {
+  /** Estimated board temperature in Celsius. */
+  boardTemperatureC: number
+  /** Temperature rise above ambient in Celsius. */
+  temperatureRiseC: number
+}
+
 export interface CursorPosition {
   x: number
   y: number

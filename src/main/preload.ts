@@ -23,7 +23,8 @@ import type {
   SheetPort,
   SiTraceResult,
   SyncProgress,
-  CrosstalkResult
+  CrosstalkResult,
+  ThermalResult
 } from '@shared/types'
 
 /**
@@ -272,6 +273,25 @@ const api = {
     ipcRenderer.invoke('si:reflection-coefficient', args),
   siPropagationDelay: (args: { effectiveEr: number; lengthMm: number }): Promise<IpcResult<{ delayNs: number }>> =>
     ipcRenderer.invoke('si:propagation-delay', args),
+
+  // Thermal
+  thermalAnalyseComponent: (args: {
+    ambientC: number
+    powerW: number
+    tJMaxC: number
+    packageType: string
+  }): Promise<IpcResult<{ result: ThermalResult }>> =>
+    ipcRenderer.invoke('thermal:analyse-component', args),
+  thermalPowerFromVI: (args: { voltageV: number; currentA: number }): Promise<IpcResult<{ powerW: number }>> =>
+    ipcRenderer.invoke('thermal:power-from-vi', args),
+  thermalPowerFromIR: (args: { currentA: number; resistanceOhm: number }): Promise<IpcResult<{ powerW: number }>> =>
+    ipcRenderer.invoke('thermal:power-from-ir', args),
+  thermalBoardTemperature: (args: {
+    ambientC: number
+    totalPowerW: number
+    boardRjaCPerW: number
+  }): Promise<IpcResult<{ boardTemperatureC: number; temperatureRiseC: number }>> =>
+    ipcRenderer.invoke('thermal:board-temperature', args),
 
   // Real-time collaboration
   collab: {
