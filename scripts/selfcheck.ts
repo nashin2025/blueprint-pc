@@ -1408,6 +1408,66 @@ check('exactly at threshold is clear', classifyClearance(2.0, 2.0) === 'clear')
 check('above threshold is clear', classifyClearance(3.0, 2.0) === 'clear')
 check('zero distance with positive threshold is a violation', classifyClearance(0, 2.0) === 'violation')
 
+// ---------------------------------------------------------------------------
+// Signal integrity self-checks
+// ---------------------------------------------------------------------------
+
+import {
+  microstripImpedance,
+  estimateCrosstalk,
+  reflectionCoefficient,
+  propagationDelayNs,
+  analyseTrace
+} from '../src/main/signal-integrity.ts'
+import type { DielectricStackup } from '../src/shared/types.ts'
+
+const stackup: DielectricStackup = { er: 4.0, thicknessMm: 0.2, copperOz: 1.0 }
+
+// 50-ohm microstrip on FR-4 (er=4, h=0.2mm, w≈0.3mm): impedance should be near 50.
+const z50 = microstripImpedance({ widthMm: 0.3, copperOz: 1.0, heightMm: 0.2, er: 4.0 })
+check('microstrip impedance is positive', z50.z0Ohms > 0)
+check('microstrip impedance near 50 ohms for 0.3mm trace on FR-4', Math.abs(z50.z0Ohms - 50) < 15)
+check('effective dielectric between 1 and er', z50.effectiveEr > 1 && z50.effectiveEr < 4.0)
+check('propagation delay per mm is positive', z50.delayNsPerMm > 0)
+
+// Effective dielectric constant should be close to 1 for air-like traces
+const eeAir = microstripImpedance({ widthMm: 10.0, copperOz: 1.0, heightMm: 0.2, er: 1.0 }).effectiveEr
+check('effective Er approaches 1 as trace gets very wide', Math.abs(eeAir - 1.0) < 0.05)
+
+// Crosstalk should be between 0 and 1
+const xtalk = estimateCrosstalk({
+  widthMm: 0.2, separationMm: 0.2, heightMm: 0.2, lengthMm: 50.0, er: 4.0, riseTimeNs: 1.0
+})
+check('NEXT fraction is between 0 and 1', xtalk.nextFraction >= 0 && xtalk.nextFraction <= 1)
+check('FEXT fraction is between 0 and 1', xtalk.fextFraction >= 0 && xtalk.fextFraction <= 1)
+check('coupling coefficient is between 0 and 1', xtalk.couplingCoefficient >= 0 && xtalk.couplingCoefficient <= 1)
+
+// Closer traces couple more
+const xtalkClose = estimateCrosstalk({ widthMm: 0.2, separationMm: 0.1, heightMm: 0.2, lengthMm: 50.0, er: 4.0, riseTimeNs: 1.0 })
+check('closer spacing increases coupling', xtalkClose.couplingCoefficient > xtalk.couplingCoefficient)
+
+// Reflection coefficient between -1 and 1
+const gamma = reflectionCoefficient(50, 75)
+check('reflection coefficient between -1 and 1', gamma >= -1 && gamma <= 1)
+check('reflection coefficient sign matches impedance step', gamma > 0)
+
+// Propagation delay is positive and scales with length
+const delay1 = propagationDelayNs(4.0, 10.0)
+const delay2 = propagationDelayNs(4.0, 20.0)
+check('propagation delay is positive', delay1 > 0)
+check('delay doubles with length', Math.abs(delay2 - 2 * delay1) < 0.001)
+
+// analyseTrace returns a complete result
+const analysed = analyseTrace({
+  traceWidthMm: 0.3,
+  traceLengthMm: 50.0,
+  stackup,
+  targetImpedanceOhms: 50
+})
+check('analyseTrace returns impedance result', analysed.impedance.z0Ohms > 0)
+check('analyseTrace tolerance is non-negative', analysed.tolerancePercent >= 0)
+check('analyseTrace withinTolerance is boolean', typeof analysed.withinTolerance === 'boolean')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()

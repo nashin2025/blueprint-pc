@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, Component, Connection, DesignSpec, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
+import type { AppSettings, Component, Connection, DesignSpec, DielectricStackup, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -28,6 +28,12 @@ import type { PcbPad, PcbVia } from './pcb-layout'
 import { generateGerberFiles } from './gerber'
 import { generateLandPattern } from './footprint-generator'
 import { collabServer } from './collaboration'
+import {
+  analyseTrace,
+  estimateCrosstalk,
+  reflectionCoefficient,
+  propagationDelayNs
+} from './signal-integrity'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -744,6 +750,72 @@ export function registerIpc(): void {
         ...args.params
       } as any)
       return { ok: true as const, data: { footprint } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Signal integrity analysis
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('si:analyse-trace', async (_e, args: {
+    traceWidthMm: number
+    traceLengthMm: number
+    stackup: DielectricStackup
+    targetImpedanceOhms?: number
+    aggressorTrace?: {
+      widthMm: number
+      separationMm: number
+      heightMm: number
+      lengthMm: number
+      er: number
+      riseTimeNs: number
+    }
+  }) => {
+    try {
+      const result = analyseTrace({
+        traceWidthMm: args.traceWidthMm,
+        traceLengthMm: args.traceLengthMm,
+        stackup: args.stackup,
+        targetImpedanceOhms: args.targetImpedanceOhms,
+        aggressorTrace: args.aggressorTrace
+      })
+      return { ok: true as const, data: { result } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('si:estimate-crosstalk', async (_e, args: {
+    widthMm: number
+    separationMm: number
+    heightMm: number
+    lengthMm: number
+    er: number
+    riseTimeNs: number
+  }) => {
+    try {
+      const result = estimateCrosstalk(args)
+      return { ok: true as const, data: { result } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('si:reflection-coefficient', async (_e, args: { z1Ohms: number; z2Ohms: number }) => {
+    try {
+      const gamma = reflectionCoefficient(args.z1Ohms, args.z2Ohms)
+      return { ok: true as const, data: { gamma } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('si:propagation-delay', async (_e, args: { effectiveEr: number; lengthMm: number }) => {
+    try {
+      const delay = propagationDelayNs(args.effectiveEr, args.lengthMm)
+      return { ok: true as const, data: { delayNs: delay } }
     } catch (err) {
       return fail(err)
     }

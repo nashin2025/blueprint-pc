@@ -8,6 +8,7 @@ import type {
   Connection,
   DesignSpec,
   DesignVersion,
+  DielectricStackup,
   DrcViolation,
   Footprint,
   GenerateRequest,
@@ -20,7 +21,9 @@ import type {
   Project,
   Sheet,
   SheetPort,
-  SyncProgress
+  SiTraceResult,
+  SyncProgress,
+  CrosstalkResult
 } from '@shared/types'
 
 /**
@@ -239,6 +242,36 @@ const api = {
     ipcRenderer.invoke('footprints:delete', args),
   footprintsGenerateLandPattern: (args: { kind: string; params: Record<string, number> }): Promise<IpcResult<{ footprint: Footprint }>> =>
     ipcRenderer.invoke('footprints:generate-land-pattern', args),
+
+  // Signal integrity
+  siAnalyseTrace: (args: {
+    traceWidthMm: number
+    traceLengthMm: number
+    stackup: DielectricStackup
+    targetImpedanceOhms?: number
+    aggressorTrace?: {
+      widthMm: number
+      separationMm: number
+      heightMm: number
+      lengthMm: number
+      er: number
+      riseTimeNs: number
+    }
+  }): Promise<IpcResult<{ result: SiTraceResult }>> =>
+    ipcRenderer.invoke('si:analyse-trace', args),
+  siEstimateCrosstalk: (args: {
+    widthMm: number
+    separationMm: number
+    heightMm: number
+    lengthMm: number
+    er: number
+    riseTimeNs: number
+  }): Promise<IpcResult<{ result: CrosstalkResult }>> =>
+    ipcRenderer.invoke('si:estimate-crosstalk', args),
+  siReflectionCoefficient: (args: { z1Ohms: number; z2Ohms: number }): Promise<IpcResult<{ gamma: number }>> =>
+    ipcRenderer.invoke('si:reflection-coefficient', args),
+  siPropagationDelay: (args: { effectiveEr: number; lengthMm: number }): Promise<IpcResult<{ delayNs: number }>> =>
+    ipcRenderer.invoke('si:propagation-delay', args),
 
   // Real-time collaboration
   collab: {

@@ -456,8 +456,87 @@ export const DEFAULT_PCB_RULES: PcbDesignRules = {
 }
 
 // ---------------------------------------------------------------------------
-// Real-time collaboration
+// Signal integrity analysis
 // ---------------------------------------------------------------------------
+
+/** Dielectric material stackup for a PCB layer. */
+export interface DielectricStackup {
+  /** Relative permittivity (dielectric constant) of the substrate. */
+  er: number
+  /** Substrate thickness (mm). */
+  thicknessMm: number
+  /** Copper thickness (oz, converted to mm internally: 1oz ≈ 0.035mm). */
+  copperOz: number
+  /** Loss tangent (dielectric loss factor). */
+  lossTangent?: number
+}
+
+/** Microstrip trace geometry (trace on outer layer, referenced to plane below). */
+export interface MicrostripTrace {
+  /** Trace width (mm). */
+  widthMm: number
+  /** Trace thickness (oz). */
+  copperOz: number
+  /** Substrate height above the reference plane (mm). */
+  heightMm: number
+  /** Dielectric relative permittivity. */
+  er: number
+}
+
+/** Result of a microstrip impedance calculation. */
+export interface ImpedanceResult {
+  /** Characteristic impedance in ohms. */
+  z0Ohms: number
+  /** Effective dielectric constant. */
+  effectiveEr: number
+  /** Propagation delay per unit length (ns/mm). */
+  delayNsPerMm: number
+}
+
+/** Two parallel microstrip traces for crosstalk analysis. */
+export interface CrosstalkPair {
+  /** Width of each trace (mm). */
+  widthMm: number
+  /** Edge-to-edge separation between traces (mm). */
+  separationMm: number
+  /** Height above reference plane (mm). */
+  heightMm: number
+  /** Trace length (mm). */
+  lengthMm: number
+  /** Dielectric relative permittivity. */
+  er: number
+  /** Rise time of the aggressor signal (ns). */
+  riseTimeNs: number
+}
+
+/** Result of crosstalk analysis. */
+export interface CrosstalkResult {
+  /** Near-end crosstalk voltage as fraction of aggressor voltage. */
+  nextFraction: number
+  /** Far-end crosstalk voltage as fraction of aggressor voltage. */
+  fextFraction: number
+  /** Coupling coefficient (0 to 1). */
+  couplingCoefficient: number
+}
+
+/** Signal integrity analysis request for one trace. */
+export interface SiTraceAnalysis {
+  projectId: string
+  traceWidthMm: number
+  traceLengthMm: number
+  stackup: DielectricStackup
+  targetImpedanceOhms?: number
+}
+
+/** Signal integrity analysis result for one trace. */
+export interface SiTraceResult {
+  traceWidthMm: number
+  traceLengthMm: number
+  impedance: ImpedanceResult
+  crosstalk?: CrosstalkResult
+  withinTolerance: boolean
+  tolerancePercent: number
+}
 
 export interface CursorPosition {
   x: number
