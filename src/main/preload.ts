@@ -24,7 +24,8 @@ import type {
   SiTraceResult,
   SyncProgress,
   CrosstalkResult,
-  ThermalResult
+  ThermalResult,
+  LibraryHealthReport
 } from '@shared/types'
 
 /**
@@ -292,6 +293,15 @@ const api = {
     boardRjaCPerW: number
   }): Promise<IpcResult<{ boardTemperatureC: number; temperatureRiseC: number }>> =>
     ipcRenderer.invoke('thermal:board-temperature', args),
+
+  // Library management
+  libraryHealthReport: (): Promise<IpcResult<{ report: LibraryHealthReport }>> =>
+    ipcRenderer.invoke('library:health-report'),
+  libraryUpdateLifecycle: (args: {
+    slug: string
+    lifecycle: 'active' | 'preview' | 'nrnd' | 'obsolete'
+  }): Promise<IpcResult<{ slug: string; lifecycle: string }>> =>
+    ipcRenderer.invoke('library:update-lifecycle', args),
 
   // Real-time collaboration
   collab: {

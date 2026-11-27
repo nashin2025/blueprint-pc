@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, Component, Connection, DesignSpec, DielectricStackup, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
+import type { AppSettings, Component, Connection, DesignSpec, DielectricStackup, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, LibraryHealthReport, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -40,6 +40,9 @@ import {
   powerFromCurrentResistance,
   powerFromVoltageCurrent
 } from './thermal'
+
+/** In-memory lifecycle overrides for parts (session-only until DB schema adds lifecycle column). */
+const lifecycleOverrides = new Map<string, 'active' | 'preview' | 'nrnd' | 'obsolete'>()
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -871,6 +874,41 @@ export function registerIpc(): void {
     try {
       const boardTemp = boardTemperatureRise(args.ambientC, args.totalPowerW, args.boardRjaCPerW)
       return { ok: true as const, data: { boardTemperatureC: boardTemp, temperatureRiseC: boardTemp - args.ambientC } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Library management
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('library:health-report', async () => {
+    try {
+      // Fetch all parts from the catalogue (large limit to get most of them)
+      const parts = searchParts('', 5000)
+      const report: LibraryHealthReport = {
+        totalParts: parts.length,
+        byLifecycle: { active: 0, preview: 0, nrnd: 0, obsolete: 0 },
+        unclassified: parts.length,
+        withSubstitutes: 0,
+        withSuppliers: 0,
+        obsoleteWithSubstitutes: 0
+      }
+      return { ok: true as const, data: { report } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('library:update-lifecycle', async (_e, args: { slug: string; lifecycle: 'active' | 'preview' | 'nrnd' | 'obsolete' }) => {
+    try {
+      const part = getPart(args.slug)
+      if (!part) return { ok: false, error: `Part not found: ${args.slug}` }
+      // Store lifecycle override in-memory for the session; persisted to DB
+      // when the catalogue schema adds a lifecycle column.
+      lifecycleOverrides.set(args.slug, args.lifecycle)
+      return { ok: true as const, data: { slug: args.slug, lifecycle: args.lifecycle } }
     } catch (err) {
       return fail(err)
     }

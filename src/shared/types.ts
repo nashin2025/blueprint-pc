@@ -296,6 +296,12 @@ export interface CataloguePart {
   lastmod: string | null
   fetchedAt: number
   pinout: CataloguePin[]
+  /** Part lifecycle status. 'obsolete' parts should not be used in new designs. */
+  lifecycle?: 'active' | 'preview' | 'nrnd' | 'obsolete'
+  /** Alternate supplier part numbers for cross-reference. */
+  suppliers?: Array<{ name: string; partNumber: string | null; url: string | null }>
+  /** Suggested alternate part slugs when this part is unavailable. */
+  substitutes?: string[]
 }
 
 /** A search result: enough to choose a part without loading all its detail. */
@@ -586,6 +592,32 @@ export interface BoardThermalResult {
   boardTemperatureC: number
   /** Temperature rise above ambient in Celsius. */
   temperatureRiseC: number
+}
+
+// ---------------------------------------------------------------------------
+// Library management
+// ---------------------------------------------------------------------------
+
+/** Library health report: summary of part lifecycle status across the catalogue. */
+export interface LibraryHealthReport {
+  /** Total number of parts in the catalogue. */
+  totalParts: number
+  /** Parts by lifecycle status. */
+  byLifecycle: Record<'active' | 'preview' | 'nrnd' | 'obsolete', number>
+  /** Parts with no lifecycle status set. */
+  unclassified: number
+  /** Parts with substitute suggestions. */
+  withSubstitutes: number
+  /** Parts with supplier cross-references. */
+  withSuppliers: number
+  /** Obsolete parts that have substitutes. */
+  obsoleteWithSubstitutes: number
+}
+
+/** Request to update a part's lifecycle status. */
+export interface PartLifecycleUpdate {
+  slug: string
+  lifecycle: 'active' | 'preview' | 'nrnd' | 'obsolete'
 }
 
 export interface CursorPosition {

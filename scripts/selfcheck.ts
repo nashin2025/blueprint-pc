@@ -1524,6 +1524,53 @@ const thermalHot = analyseComponent({
 })
 check('high power gives critical status', thermalHot.status === 'critical')
 
+// ---------------------------------------------------------------------------
+// Library management self-checks
+// ---------------------------------------------------------------------------
+
+import {
+  libraryHealthReport,
+  applyLifecycleUpdate,
+  isPartUsable,
+  findSubstitutes,
+  findObsoleteWithSubstitutes
+} from '../src/main/library.ts'
+import type { CataloguePart } from '../src/shared/types.ts'
+
+const testParts: CataloguePart[] = [
+  { slug: 'r1', name: 'Resistor 10k', brand: 'Yageo', partNumber: 'RC0603', description: '10k resistor', category: 'Passive', priceText: '0.01', priceValue: 0.01, priceCurrency: 'USD', url: null, image: null, lastmod: null, fetchedAt: 0, pinout: [], lifecycle: 'active' },
+  { slug: 'c1', name: 'Capacitor 100nF', brand: 'Murata', partNumber: 'GRM188', description: '100nF cap', category: 'Passive', priceText: '0.02', priceValue: 0.02, priceCurrency: 'USD', url: null, image: null, lastmod: null, fetchedAt: 0, pinout: [], lifecycle: 'active', substitutes: ['c2'] },
+  { slug: 'c2', name: 'Capacitor 100nF alt', brand: 'TDK', partNumber: 'C1608', description: '100nF cap alt', category: 'Passive', priceText: '0.03', priceValue: 0.03, priceCurrency: 'USD', url: null, image: null, lastmod: null, fetchedAt: 0, pinout: [], lifecycle: 'preview' },
+  { slug: 'u1', name: 'Old MCU', brand: 'Microchip', partNumber: 'PIC16F84', description: 'Obsolete MCU', category: 'Microcontroller', priceText: null, priceValue: null, priceCurrency: null, url: null, image: null, lastmod: null, fetchedAt: 0, pinout: [], lifecycle: 'obsolete', substitutes: ['u2'], suppliers: [{ name: 'DigiKey', partNumber: null, url: null }] },
+  { slug: 'u2', name: 'New MCU', brand: 'Microchip', partNumber: 'PIC16F88', description: 'Newer MCU', category: 'Microcontroller', priceText: '1.50', priceValue: 1.50, priceCurrency: 'USD', url: null, image: null, lastmod: null, fetchedAt: 0, pinout: [], lifecycle: 'active' }
+]
+
+const report = libraryHealthReport(testParts)
+check('library health report counts all parts', report.totalParts === 5)
+check('library health report counts active parts', report.byLifecycle.active === 3)
+check('library health report counts obsolete parts', report.byLifecycle.obsolete === 1)
+check('library health report counts unclassified', report.unclassified === 0)
+check('library health report counts parts with substitutes', report.withSubstitutes === 2)
+check('library health report counts parts with suppliers', report.withSuppliers === 1)
+check('library health report counts obsolete with substitutes', report.obsoleteWithSubstitutes === 1)
+
+// applyLifecycleUpdate returns a new part with updated lifecycle
+const updated = applyLifecycleUpdate(testParts[0], { slug: 'r1', lifecycle: 'obsolete' })
+check('applyLifecycleUpdate changes lifecycle', updated.lifecycle === 'obsolete')
+check('applyLifecycleUpdate does not mutate original', testParts[0].lifecycle === 'active')
+
+// isPartUsable
+check('isPartUsable returns true for active', isPartUsable(testParts[0]) === true)
+check('isPartUsable returns false for obsolete', isPartUsable(testParts[3]) === false)
+
+// findSubstitutes
+const subs = findSubstitutes('c1', testParts)
+check('findSubstitutes returns matching parts', subs.length === 1 && subs[0].slug === 'c2')
+
+// findObsoleteWithSubstitutes
+const obsoleteWithSubs = findObsoleteWithSubstitutes(testParts)
+check('findObsoleteWithSubstitutes finds u1', obsoleteWithSubs.length === 1 && obsoleteWithSubs[0].slug === 'u1')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()
