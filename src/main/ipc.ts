@@ -223,6 +223,17 @@ export function registerIpc(): void {
     }
   })
 
+  ipcMain.handle('projects:save-json', async (_e, args: { projectId: string; outputPath: string }) => {
+    try {
+      const json = store.exportProjectJson(args.projectId)
+      const { writeFileSync } = await import('node:fs')
+      writeFileSync(args.outputPath, json, 'utf-8')
+      return { ok: true as const, data: { outputPath: args.outputPath } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
   ipcMain.handle('projects:import-json', async (_e, args: { json: string }) => {
     try {
       const project = store.importProjectJson(args.json)

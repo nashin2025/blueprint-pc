@@ -451,6 +451,8 @@ const api = {
   // Project import/export (.bpjson)
   pcbExportProjectJson: (projectId: string): Promise<IpcResult<{ json: string }>> =>
     ipcRenderer.invoke('projects:export-json', projectId),
+  pcbSaveProjectJson: (args: { projectId: string; outputPath: string }): Promise<IpcResult<{ outputPath: string }>> =>
+    ipcRenderer.invoke('projects:save-json', args),
   pcbImportProjectJson: (args: { json: string }): Promise<IpcResult<{ project: Project }>> =>
     ipcRenderer.invoke('projects:import-json', args),
 

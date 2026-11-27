@@ -87,6 +87,22 @@ export default function ProjectLibrary({ onBack, onOpenProject }: ProjectLibrary
     }
   }
 
+  async function exportAsBpjson(id: string) {
+    const proj = await window.api.getProject(id)
+    if (!proj) return
+    const safeTitle = proj.spec.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()
+    const outputPath = `data/exports/${safeTitle}_${Date.now()}.bpjson`
+    setExporting({ id, progress: 0 })
+    try {
+      await window.api.pcbSaveProjectJson({ projectId: id, outputPath })
+      setExporting(null)
+      await window.api.showDataFolder()
+    } catch (err) {
+      setExporting(null)
+      console.error('Export .bpjson failed:', err)
+    }
+  }
+
   async function handleImport() {
     setImporting(true)
     try {
@@ -95,7 +111,14 @@ export default function ProjectLibrary({ onBack, onOpenProject }: ProjectLibrary
         setImporting(false)
         return
       }
-      await window.api.importProject(picked.filePath)
+      if (picked.filePath.toLowerCase().endsWith('.bpjson')) {
+        const read = await window.api.projectsReadFile(picked.filePath)
+        if (!read.ok || !read.data) throw new Error(read.error ?? 'Read failed')
+        const project = await window.api.pcbImportProjectJson({ json: read.data.content })
+        if (!project.ok) throw new Error(project.error)
+      } else {
+        await window.api.importProject(picked.filePath)
+      }
       setRefreshKey((k) => k + 1)
     } catch (err) {
       console.error('Import failed:', err)
@@ -311,6 +334,14 @@ export default function ProjectLibrary({ onBack, onOpenProject }: ProjectLibrary
                       title="Export .bpzip"
                     >
                       <ExportIcon size={12} />
+                    </button>
+
+                    <button
+                      onClick={() => exportAsBpjson(p.id)}
+                      className="btn-ghost hover:bg-surface-1 p-1.5"
+                      title="Export .bpjson (canonical JSON)"
+                    >
+                      <ExportIcon size={12} className="text-yellow-400" />
                     </button>
                   </div>
                 </div>
