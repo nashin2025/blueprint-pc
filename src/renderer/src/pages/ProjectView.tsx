@@ -607,7 +607,7 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
           />
         )}
         {activeTab === 'wiring' && <WiringTab spec={spec} />}
-        {activeTab === 'mech' && <MechTab spec={spec} onModelUrlChange={onModelUrlChange} onCanvasZoom={onCanvasZoom} />}
+        {activeTab === 'mech' && <MechTab spec={spec} projectId={project.id} onModelUrlChange={onModelUrlChange} onCanvasZoom={onCanvasZoom} />}
         {activeTab === 'chat' && <ChatTab project={project} onSave={upsertProject} onBack={() => onTabChange('overview')} />}
         {activeTab === 'product' && <InfoTab project={project} onSave={upsertProject} />}
         {activeTab === 'part' && <PartTab onAdd={onAddComponent} />}

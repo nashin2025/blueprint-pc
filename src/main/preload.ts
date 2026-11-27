@@ -56,6 +56,24 @@ const api = {
   pcbExportGerber: (projectId: string): Promise<IpcResult<{ files: Record<string, string>; unrouted: any[]; boardW: number; boardH: number }>> =>
     ipcRenderer.invoke('pcb:export-gerber', projectId),
 
+  pcbCheckClearance: (args: { projectId: string; clearance: number }): Promise<
+    IpcResult<{
+      violations: Array<{
+        componentId1: string
+        componentId2: string
+        name1: string
+        name2: string
+        distance: number
+        clearance: number
+      }>
+      clearance: number
+    }>
+  > => ipcRenderer.invoke('pcb:clearance-check', args),
+
+  pcbMeasureDistance: (args: { projectId: string; compId1: string; compId2: string }): Promise<
+    IpcResult<{ componentId1: string; componentId2: string; distance: number }>
+  > => ipcRenderer.invoke('pcb:measure-distance', args),
+
   loadSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: AppSettings): Promise<AppSettings> =>
     ipcRenderer.invoke('settings:save', settings),

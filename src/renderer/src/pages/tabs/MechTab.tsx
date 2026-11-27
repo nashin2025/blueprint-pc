@@ -6,9 +6,14 @@ import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
 import type { CadDiscoveryProgress, DesignSpec, IpcResult } from '@shared/types'
 import { hasCadModel } from '@/lib/cadSources'
+import SectionView, { type SectionAxis } from '@/components/SectionView'
+import MeasurementTool, { measureDistance3D, type Vec3 } from '@/components/MeasurementTool'
+import ClearanceHeatmap, { type ClearanceClass, classifyClearance } from '@/components/ClearanceHeatmap'
 
 interface Props {
   spec: DesignSpec
+  /** Stable project id, used to query server-side clearance/distance IPC. */
+  projectId: string
   /** Persist a discovered or user-pasted model URL back to the project. */
   onModelUrlChange: (partId: string, modelUrl: string) => void
   /** Report canvas zoom percentage up to the app-level status bar. */
@@ -58,7 +63,27 @@ function partNameOrSlug(c: { name: string; partName?: string; slug?: string }): 
   return c.partName ?? c.name
 }
 
-export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props) {
+interface ClearanceViolation {
+  componentId1: string
+  componentId2: string
+  name1: string
+  name2: string
+  distance: number
+  clearance: number
+}
+
+const CLASS_HEX: Record<ClearanceClass, string> = {
+  clear: '#46c79a', // --color-ok
+  tight: '#e0a34a', // --color-warn
+  violation: '#e5544b', // --color-danger
+}
+
+const worstClearance = (a: ClearanceClass, b: ClearanceClass): ClearanceClass => {
+  const rank = { clear: 0, tight: 1, violation: 2 }
+  return rank[a] >= rank[b] ? a : b
+}
+
+export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoom }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [modelsLoaded, setModelsLoaded] = useState<Set<string>>(new Set())
   const [loadError, setLoadError] = useState<Record<string, string>>({})
@@ -70,6 +95,31 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
   const [downloading, setDownloading] = useState<Set<string>>(new Set())
   const [cadProgress, setCadProgress] = useState<CadDiscoveryProgress | null>(null)
   const cadPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ---------------------------------------------------------------------------
+  // Section plane state
+  // ---------------------------------------------------------------------------
+
+  const [sectionEnabled, setSectionEnabled] = useState(false)
+  const [sectionAxis, setSectionAxis] = useState<SectionAxis>('z')
+  const [sectionPosition, setSectionPosition] = useState(0)
+
+  // ---------------------------------------------------------------------------
+  // Measurement state
+  // ---------------------------------------------------------------------------
+
+  const [measurementEnabled, setMeasurementEnabled] = useState(false)
+  const [measurePoint1, setMeasurePoint1] = useState<Vec3 | null>(null)
+  const [measurePoint2, setMeasurePoint2] = useState<Vec3 | null>(null)
+  const [measureDistance, setMeasureDistance] = useState<number | null>(null)
+
+  // ---------------------------------------------------------------------------
+  // Clearance heatmap state
+  // ---------------------------------------------------------------------------
+
+  const [clearanceEnabled, setClearanceEnabled] = useState(false)
+  const [clearanceThreshold, setClearanceThreshold] = useState(2.0)
+  const [clearanceViolations, setClearanceViolations] = useState<ClearanceViolation[]>([])
 
   // ---------------------------------------------------------------------------
   // GrabCAD Community Library state
@@ -85,6 +135,74 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
     Record<string, { id: string; name: string; url: string }[]>
   >({})
   const [grabcadDownloadingSlug, setGrabcadDownloadingSlug] = useState<string | null>(null)
+
+  // ---------------------------------------------------------------------------
+  // Three.js refs (populated in the scene setup effect)
+  // ---------------------------------------------------------------------------
+
+  const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
+  const sceneRef = useRef<THREE.Scene | null>(null)
+  const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
+  const meshByPartIdRef = useRef<Map<string, THREE.Object3D>>(new Map())
+  const originalColorsRef = useRef<Map<string, string>>(new Map())
+  const raycasterRef = useRef(new THREE.Raycaster())
+  const mouseRef = useRef(new THREE.Vector2())
+  const measurementRef = useRef({
+    enabled: false,
+    point1: null as Vec3 | null,
+    point2: null as Vec3 | null,
+    distance: null as number | null,
+  })
+
+  // ---------------------------------------------------------------------------
+  // Helpers: colour parts for the clearance heatmap
+  // ---------------------------------------------------------------------------
+
+  const captureOriginalColor = useCallback((partId: string) => {
+    const obj = meshByPartIdRef.current.get(partId)
+    if (!obj || originalColorsRef.current.has(partId)) return
+    let captured = false
+    obj.traverse((child: any) => {
+      if (captured) return
+      if (child.isMesh && child.material) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material]
+        const m = mats[0]
+        if (m && m.color) {
+          originalColorsRef.current.set(partId, m.color.getHexString())
+          captured = true
+        }
+      }
+    })
+  }, [])
+
+  const applyColorToPart = useCallback((partId: string, hex: string) => {
+    const obj = meshByPartIdRef.current.get(partId)
+    if (!obj) return
+    obj.traverse((child: any) => {
+      if (child.isMesh && child.material) {
+        const mats = Array.isArray(child.material) ? child.material : [child.material]
+        for (const m of mats) {
+          if (m) m.color.setStyle(hex)
+        }
+      }
+    })
+  }, [])
+
+  const restoreOriginalColors = useCallback(() => {
+    originalColorsRef.current.forEach((hex, partId) => {
+      const obj = meshByPartIdRef.current.get(partId)
+      if (!obj) return
+      obj.traverse((child: any) => {
+        if (child.isMesh && child.material) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material]
+          for (const m of mats) {
+            if (m) m.color.setStyle('#' + hex)
+          }
+        }
+      })
+    })
+    originalColorsRef.current.clear()
+  }, [])
 
   // ---------------------------------------------------------------------------
   // Poll bulk discovery progress
@@ -135,6 +253,40 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
       cancelled = true
     }
   }, [])
+
+  // ---------------------------------------------------------------------------
+  // Keep the measurement ref in sync so the canvas click handler reads fresh state
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    measurementRef.current = {
+      enabled: measurementEnabled,
+      point1: measurePoint1,
+      point2: measurePoint2,
+      distance: measureDistance,
+    }
+  }, [measurementEnabled, measurePoint1, measurePoint2, measureDistance])
+
+  // ---------------------------------------------------------------------------
+  // Section plane -> Three.js clipping planes (re-applied whenever the scene is
+  // recreated, since onCanvasZoom can rebuild the renderer each frame)
+  // ---------------------------------------------------------------------------
+
+  const applySectionClipping = useCallback(() => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+    if (sectionEnabled) {
+      const normal =
+        sectionAxis === 'x'
+          ? new THREE.Vector3(-1, 0, 0)
+          : sectionAxis === 'y'
+          ? new THREE.Vector3(0, -1, 0)
+          : new THREE.Vector3(0, 0, -1)
+      renderer.clippingPlanes = [new THREE.Plane(normal, sectionPosition)]
+    } else {
+      renderer.clippingPlanes = []
+    }
+  }, [sectionEnabled, sectionAxis, sectionPosition])
 
   // ---------------------------------------------------------------------------
   // Actions
@@ -277,6 +429,8 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
             }
           })
           obj.name = partName
+          ;(obj as any).userData = { ...((obj as any).userData ?? {}), partId, partName }
+          meshByPartIdRef.current.set(partId, obj as THREE.Object3D)
           ;(scene as any).add(obj)
           setModelsLoaded((prev) => new Set([...prev, partId]))
           setLoading((prev) => {
@@ -319,7 +473,16 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
     renderer.setPixelRatio(window.devicePixelRatio)
     renderer.shadowMap.enabled = true
     renderer.shadowMap.type = THREE.PCFSoftShadowMap
+    renderer.localClippingEnabled = false
     container.appendChild(renderer.domElement)
+
+    rendererRef.current = renderer
+    sceneRef.current = scene
+    cameraRef.current = camera
+    meshByPartIdRef.current.clear()
+    originalColorsRef.current.clear()
+
+    applySectionClipping()
 
     const controls = new OrbitControls(camera, renderer.domElement)
     controls.enableDamping = true
@@ -368,6 +531,7 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
       mesh.receiveShadow = true
       mesh.name = part.name
       mesh.userData = { partId: part.id, partName: part.name }
+      meshByPartIdRef.current.set(part.id, mesh)
       scene.add(mesh)
     })
 
@@ -390,6 +554,35 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
     }
     animate()
 
+    const onCanvasClick = (event: MouseEvent) => {
+      if (!measurementEnabled) return
+      const renderer = rendererRef.current
+      const camera = cameraRef.current
+      const scene = sceneRef.current
+      if (!renderer || !camera || !scene) return
+      const rect = renderer.domElement.getBoundingClientRect()
+      mouseRef.current.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
+      mouseRef.current.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+      raycasterRef.current.setFromCamera(mouseRef.current, camera)
+      const intersects = raycasterRef.current.intersectObjects(scene.children, true)
+      if (intersects.length === 0) return
+      const point = intersects[0].point
+      const hit = { x: point.x, y: point.y, z: point.z }
+      const current = measurementRef.current
+      if (!current.point1) {
+        setMeasurePoint1(hit)
+        setMeasureDistance(null)
+      } else if (!current.point2) {
+        setMeasurePoint2(hit)
+        setMeasureDistance(measureDistance3D(current.point1, hit))
+      } else {
+        setMeasurePoint1(hit)
+        setMeasurePoint2(null)
+        setMeasureDistance(null)
+      }
+    }
+    renderer.domElement.addEventListener('click', onCanvasClick)
+
     const onResize = () => {
       if (!container) return
       camera.aspect = container.clientWidth / container.clientHeight
@@ -400,12 +593,55 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
 
     return () => {
       window.removeEventListener('resize', onResize)
+      renderer.domElement.removeEventListener('click', onCanvasClick)
       cancelAnimationFrame(frameId)
       controls.dispose()
       renderer.dispose()
       container.removeChild(renderer.domElement)
     }
-  }, [spec.components, onCanvasZoom])
+  }, [spec.components, onCanvasZoom, applySectionClipping, measurementEnabled])
+
+  // ---------------------------------------------------------------------------
+  // Section plane -> Three.js clipping planes (handles section changes when the
+  // renderer is not being recreated)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    applySectionClipping()
+  }, [applySectionClipping])
+
+  // ---------------------------------------------------------------------------
+  // Clearance heatmap -> IPC + mesh colouring
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (!clearanceEnabled) {
+      restoreOriginalColors()
+      setClearanceViolations([])
+      return
+    }
+    void (async () => {
+      const res = await window.api.pcbCheckClearance({ projectId, clearance: clearanceThreshold })
+      if (!res.ok || !res.data) {
+        setClearanceViolations([])
+        return
+      }
+      const violations = res.data.violations
+      setClearanceViolations(violations)
+      const partClass = new Map<string, ClearanceClass>()
+      for (const v of violations) {
+        const cls = classifyClearance(v.distance, v.clearance)
+        for (const id of [v.componentId1, v.componentId2]) {
+          const cur = partClass.get(id) ?? 'clear'
+          partClass.set(id, worstClearance(cur, cls))
+        }
+      }
+      meshByPartIdRef.current.forEach((_obj, partId) => {
+        captureOriginalColor(partId)
+        applyColorToPart(partId, CLASS_HEX[partClass.get(partId) ?? 'clear'])
+      })
+    })()
+  }, [clearanceEnabled, clearanceThreshold, projectId, captureOriginalColor, applyColorToPart, restoreOriginalColors])
 
   // ---------------------------------------------------------------------------
   // Persist model URLs from the component spec into local state
@@ -618,6 +854,38 @@ export default function MechTab({ spec, onModelUrlChange, onCanvasZoom }: Props)
           <span className="font-mono text-xs">.gltf/.glb</span> URL into a part row to override, then click Load.
           Some hosts block cross-origin model loading — those parts stay as primitives.
         </p>
+      </div>
+
+      {/* 3D inspection tools */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+        <SectionView
+          enabled={sectionEnabled}
+          axis={sectionAxis}
+          position={sectionPosition}
+          onToggle={setSectionEnabled}
+          onAxisChange={setSectionAxis}
+          onPositionChange={setSectionPosition}
+        />
+        <MeasurementTool
+          enabled={measurementEnabled}
+          point1={measurePoint1}
+          point2={measurePoint2}
+          distance={measureDistance}
+          onToggle={setMeasurementEnabled}
+          onClear={() => {
+            setMeasurePoint1(null)
+            setMeasurePoint2(null)
+            setMeasureDistance(null)
+          }}
+        />
+        <ClearanceHeatmap
+          enabled={clearanceEnabled}
+          threshold={clearanceThreshold}
+          onToggle={setClearanceEnabled}
+          onThresholdChange={setClearanceThreshold}
+          onCheck={() => void 0}
+          violationCount={clearanceViolations.length}
+        />
       </div>
 
       {/* 3D scene */}

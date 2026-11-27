@@ -1318,6 +1318,96 @@ async function runServerStopTests(): Promise<void> {
   check('collabServer.stop: double stop rejected', doubleStop.ok === false)
 }
 
+// ---------------------------------------------------------------------------
+console.log('\n3D mechanical integration: section plane, measurement, clearance')
+// ---------------------------------------------------------------------------
+
+// Section plane: clipping plane construction mirrors SectionView / MechTab.
+function sectionPlane(axis: 'x' | 'y' | 'z', position: number): { normal: [number, number, number]; constant: number } {
+  const normal = axis === 'x' ? [-1, 0, 0] : axis === 'y' ? [0, -1, 0] : [0, 0, -1]
+  return { normal, constant: position }
+}
+
+const sx = sectionPlane('x', 3)
+check('section plane X normal points negative X', sx.normal[0] === -1 && sx.normal[1] === 0 && sx.normal[2] === 0)
+check('section plane X constant is the position', sx.constant === 3)
+const sy = sectionPlane('y', -2)
+check('section plane Y normal points negative Y', sy.normal[1] === -1)
+check('section plane Y constant is the position', sy.constant === -2)
+const sz = sectionPlane('z', 5)
+check('section plane Z normal points negative Z', sz.normal[2] === -1)
+check('section plane Z constant is the position', sz.constant === 5)
+// Plane equation: normal·point + constant = 0; a point on the plane satisfies it.
+const onPlaneX = sx.normal[0] * 3 + sx.normal[1] * 0 + sx.normal[2] * 0 + sx.constant
+check('point (3,0,0) lies on the X=3 plane', onPlaneX === 0)
+
+// Measurement: distance between two 3D points mirrors measureDistance3D.
+function distance3D(a: { x: number; y: number; z: number }, b: { x: number; y: number; z: number }): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const dz = b.z - a.z
+  return Math.sqrt(dx * dx + dy * dy + dz * dz)
+}
+
+check('distance from origin to (3,4,0) is 5', distance3D({ x: 0, y: 0, z: 0 }, { x: 3, y: 4, z: 0 }) === 5)
+check('distance is symmetric', distance3D({ x: 1, y: 2, z: 3 }, { x: 4, y: 6, z: 8 }) === distance3D({ x: 4, y: 6, z: 8 }, { x: 1, y: 2, z: 3 }))
+check('same point has zero distance', distance3D({ x: 1, y: 1, z: 1 }, { x: 1, y: 1, z: 1 }) === 0)
+check('3D diagonal matches sqrt(3)', Math.abs(distance3D({ x: 0, y: 0, z: 0 }, { x: 1, y: 1, z: 1 }) - Math.sqrt(3)) < 1e-10)
+
+// Clearance: pairwise component check mirrors the pcb:clearance-check handler.
+function gridComponentPositions(components: Array<{ id: string; name: string }>): Array<{ componentId: string; name: string; x: number; y: number; z: number }> {
+  const boxSize = 2.2
+  const gridCols = Math.ceil(Math.sqrt(components.length))
+  const gridRows = Math.ceil(components.length / gridCols)
+  return components.map((part, i) => {
+    const col = i % gridCols
+    const row = Math.floor(i / gridCols)
+    const x = (col - gridCols / 2) * boxSize
+    const z = (row - gridRows / 2) * boxSize
+    return { componentId: part.id, name: part.name, x, y: 0, z }
+  })
+}
+
+function checkClearance(components: Array<{ id: string; name: string }>, threshold: number): Array<{ a: string; b: string; distance: number }> {
+  const positions = gridComponentPositions(components)
+  const out: Array<{ a: string; b: string; distance: number }> = []
+  for (let i = 0; i < positions.length; i++) {
+    for (let j = i + 1; j < positions.length; j++) {
+      const a = positions[i]
+      const b = positions[j]
+      const d = Math.sqrt((a.x - b.x) ** 2 + (a.z - b.z) ** 2)
+      if (d > 0 && d < threshold) out.push({ a: a.componentId, b: b.componentId, distance: d })
+    }
+  }
+  return out
+}
+
+const comps = [
+  { id: 'c1', name: 'A' },
+  { id: 'c2', name: 'B' },
+  { id: 'c3', name: 'C' },
+]
+
+// Adjacent grid cells sit exactly one boxSize apart; at threshold == boxSize the
+// strict "less than" comparison yields no spurious violation.
+check('adjacent cells at exactly threshold are not violations', checkClearance(comps, 2.2).length === 0)
+const tight = checkClearance(comps, 2.2001)
+check('slightly larger threshold flags adjacent pairs', tight.length === 2)
+check('clearance violations reference real components', tight.every((v) => comps.some((c) => c.id === v.a || c.id === v.b)))
+
+// Clearance heatmap classification mirrors classifyClearance.
+function classifyClearance(distance: number, threshold: number): 'clear' | 'tight' | 'violation' {
+  if (distance < threshold * 0.5) return 'violation'
+  if (distance < threshold) return 'tight'
+  return 'clear'
+}
+
+check('well below threshold is a violation', classifyClearance(0.5, 2.0) === 'violation')
+check('just below threshold is tight', classifyClearance(1.9, 2.0) === 'tight')
+check('exactly at threshold is clear', classifyClearance(2.0, 2.0) === 'clear')
+check('above threshold is clear', classifyClearance(3.0, 2.0) === 'clear')
+check('zero distance with positive threshold is a violation', classifyClearance(0, 2.0) === 'violation')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()

@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, Connection, DesignSpec, Footprint, GenerateRequest, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
+import type { AppSettings, Component, Connection, DesignSpec, Footprint, GenerateRequest, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -45,6 +45,30 @@ const MODEL_EXTS = ['.stl', '.obj', '.gltf', '.glb']
 function endsWithModelExt(url: string): boolean {
   const base = url.split('?')[0].split('#')[0].toLowerCase()
   return MODEL_EXTS.some((ext) => base.endsWith(ext))
+}
+
+/** Mirrors the grid layout used by the MechTab Three.js scene so the main
+ *  process can compute component positions from a DesignSpec that stores no
+ *  3D coordinates of its own. All values are in scene units (mm). */
+export interface PositionedComponent {
+  componentId: string
+  name: string
+  x: number
+  y: number
+  z: number
+}
+
+function gridComponentPositions(components: Component[]): PositionedComponent[] {
+  const boxSize = 2.2
+  const gridCols = Math.ceil(Math.sqrt(components.length))
+  const gridRows = Math.ceil(components.length / gridCols)
+  return components.map((part, i) => {
+    const col = i % gridCols
+    const row = Math.floor(i / gridCols)
+    const x = (col - gridCols / 2) * boxSize
+    const z = (row - gridRows / 2) * boxSize
+    return { componentId: part.id, name: part.name, x, y: 0, z }
+  })
 }
 
 /** Fetches a product page (main process, so no CORS) and returns the first direct
@@ -470,6 +494,65 @@ export function registerIpc(): void {
         ok: true as const,
         data: { files, unrouted, boardW, boardH },
       }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:clearance-check', async (_e, args: { projectId: string; clearance: number }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const clearance = Math.max(0, Number(args.clearance) || 0)
+      const positions = gridComponentPositions(project.spec.components)
+      const violations: Array<{
+        componentId1: string
+        componentId2: string
+        name1: string
+        name2: string
+        distance: number
+        clearance: number
+      }> = []
+      for (let i = 0; i < positions.length; i++) {
+        for (let j = i + 1; j < positions.length; j++) {
+          const a = positions[i]
+          const b = positions[j]
+          const dx = a.x - b.x
+          const dz = a.z - b.z
+          const distance = Math.sqrt(dx * dx + dz * dz)
+          // Zero distance means two components share a grid cell; ignore rather
+          // than report a spurious violation on overlapping primitives.
+          if (distance > 0 && distance < clearance) {
+            violations.push({
+              componentId1: a.componentId,
+              componentId2: b.componentId,
+              name1: a.name,
+              name2: b.name,
+              distance,
+              clearance,
+            })
+          }
+        }
+      }
+      return { ok: true as const, data: { violations, clearance } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:measure-distance', async (_e, args: { projectId: string; compId1: string; compId2: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const positions = gridComponentPositions(project.spec.components)
+      const byId = new Map(positions.map((p) => [p.componentId, p]))
+      const a = byId.get(args.compId1)
+      const b = byId.get(args.compId2)
+      if (!a || !b) return { ok: false, error: 'One or both components not found' }
+      const dx = a.x - b.x
+      const dz = a.z - b.z
+      const distance = Math.sqrt(dx * dx + dz * dz)
+      return { ok: true as const, data: { componentId1: args.compId1, componentId2: args.compId2, distance } }
     } catch (err) {
       return fail(err)
     }
