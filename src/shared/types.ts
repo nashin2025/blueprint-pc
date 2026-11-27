@@ -418,3 +418,58 @@ export const DEFAULT_PCB_RULES: PcbDesignRules = {
   viaToTraceClearance: 0.2,
   minAnnularRing: 0.1
 }
+
+// ---------------------------------------------------------------------------
+// Real-time collaboration
+// ---------------------------------------------------------------------------
+
+export interface CursorPosition {
+  x: number
+  y: number
+  /** Optional sheet the cursor is on (multi-sheet designs). */
+  sheetId?: string
+}
+
+export interface CollabUser {
+  id: string
+  displayName: string
+  /** Hex color used to render this user's cursor and presence badge. */
+  color: string
+  cursor: CursorPosition | null
+  lastSeen: number
+}
+
+export type CollabOperationType =
+  | 'component.added'
+  | 'component.moved'
+  | 'component.updated'
+  | 'component.removed'
+  | 'connection.added'
+  | 'connection.removed'
+  | 'sheet.added'
+  | 'sheet.renamed'
+  | 'sheet.deleted'
+
+export interface CollabOperation {
+  id: string
+  type: CollabOperationType
+  projectId: string
+  /** User who originated the operation. */
+  userId: string
+  timestamp: number
+  /** Operation-specific payload. */
+  payload: Record<string, unknown>
+}
+
+export type ClientToServerMessage =
+  | { type: 'join'; projectId: string; userId: string; displayName: string }
+  | { type: 'leave'; projectId: string; userId: string }
+  | { type: 'cursor.move'; projectId: string; userId: string; x: number; y: number; sheetId?: string }
+  | { type: 'operation'; operation: CollabOperation }
+
+export type ServerToClientMessage =
+  | { type: 'presence'; users: CollabUser[] }
+  | { type: 'cursor'; userId: string; x: number; y: number; sheetId?: string }
+  | { type: 'operation'; operation: CollabOperation }
+  | { type: 'error'; message: string }
+  | { type: 'joined'; projectId: string; userId: string }

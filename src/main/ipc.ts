@@ -26,6 +26,7 @@ import { placeComponents, attachPads, routeTraces } from './pcb-layout'
 import type { PcbPad, PcbVia } from './pcb-layout'
 import { generateGerberFiles } from './gerber'
 import { generateLandPattern } from './footprint-generator'
+import { collabServer } from './collaboration'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -948,6 +949,42 @@ export function registerIpc(): void {
           localFile: firstFile ?? null
         }
       }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  // -------------------------------------------------------------------------
+  // Real-time collaboration
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('collaboration:start', async (_e, port?: number) => {
+    try {
+      const result = collabServer.start(port)
+      if (result.ok) {
+        return { ok: true as const, data: { port: result.port } }
+      }
+      return { ok: false as const, error: result.error }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('collaboration:stop', async () => {
+    try {
+      const result = collabServer.stop()
+      if (result.ok) {
+        return { ok: true as const }
+      }
+      return { ok: false as const, error: result.error }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('collaboration:status', async () => {
+    try {
+      return { ok: true as const, data: collabServer.status() }
     } catch (err) {
       return fail(err)
     }

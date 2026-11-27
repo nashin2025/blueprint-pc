@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CartItem, DrcViolation } from '@shared/types'
+import type { CartItem } from '@shared/types'
 import type {
   AppSettings,
   CadDiscoveryProgress,
@@ -8,6 +8,7 @@ import type {
   Connection,
   DesignSpec,
   DesignVersion,
+  DrcViolation,
   Footprint,
   GenerateRequest,
   InfoRequest,
@@ -189,7 +190,17 @@ const api = {
   footprintsDelete: (args: { projectId: string; footprintId: string }): Promise<IpcResult<{ project: Project }>> =>
     ipcRenderer.invoke('footprints:delete', args),
   footprintsGenerateLandPattern: (args: { kind: string; params: Record<string, number> }): Promise<IpcResult<{ footprint: Footprint }>> =>
-    ipcRenderer.invoke('footprints:generate-land-pattern', args)
+    ipcRenderer.invoke('footprints:generate-land-pattern', args),
+
+  // Real-time collaboration
+  collab: {
+    start: (port?: number): Promise<IpcResult<{ port: number }>> =>
+      ipcRenderer.invoke('collaboration:start', port),
+    stop: (): Promise<IpcResult<void>> =>
+      ipcRenderer.invoke('collaboration:stop'),
+    status: (): Promise<IpcResult<{ running: boolean; port: number | null; clientCount: number }>> =>
+      ipcRenderer.invoke('collaboration:status')
+  }
 }
 
 export type Bridge = typeof api

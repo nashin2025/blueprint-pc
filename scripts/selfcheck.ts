@@ -26,7 +26,7 @@ import { layoutWiring } from '../src/renderer/src/lib/wiringLayout.ts'
 import { layoutPackage, pinCategory } from '../src/renderer/src/lib/packageLayout.ts'
 import { normalisePin, parseCurrency, parsePriceValue } from '../src/main/sync/schematik-parse.ts'
 import { MVR_PER_USD, approxUsd, formatNative, isComparable, toUsd } from '../src/shared/money.ts'
-import type { Component, Connection, Sheet, SheetPort } from '../src/shared/types.ts'
+import type { Component, Connection, CollabOperation, CollabUser, Sheet, SheetPort } from '../src/shared/types.ts'
 import { runDrc, summarizeDrc } from '../src/main/drc.ts'
 import {
   placeComponents,
@@ -48,6 +48,14 @@ import {
 } from '../src/main/circuit-sim.ts'
 import { buildNetlist } from '../src/main/netlist.ts'
 import { DEFAULT_PCB_RULES } from '../src/shared/types.ts'
+import { WebSocket } from 'ws'
+import {
+  colourForUserId,
+  createCollabUser,
+  lastWriteWins,
+  applyOperationToSpec,
+  collabServer
+} from '../src/main/collaboration.ts'
 
 let failures = 0
 let checks = 0
@@ -1107,9 +1115,219 @@ const custom = generateLandPattern({ type: 'custom', padWidth: 1.0, padLength: 2
 check('Footprint: custom passes through pad dimensions', custom.pads.length === 2 && custom.pads[0].w === 1.0 && custom.pads[0].h === 2.0)
 
 // ---------------------------------------------------------------------------
-console.log(`\n${checks - failures}/${checks} checks passed`)
-if (failures > 0) {
-  console.error(`${failures} FAILED`)
-  process.exit(1)
+console.log('\nCollaboration: pure functions')
+// ---------------------------------------------------------------------------
+
+// colourForUserId: deterministic, same id -> same colour.
+check('colour: same id yields same colour', colourForUserId('user-a') === colourForUserId('user-a'))
+check('colour: different ids can differ', colourForUserId('user-a') !== colourForUserId('user-b'))
+check('colour: always a hex colour', /^#[0-9a-f]{6}$/i.test(colourForUserId('any-user')))
+
+// createCollabUser.
+const testUser = createCollabUser('u1', 'Alice')
+check('createCollabUser: id matches', testUser.id === 'u1')
+check('createCollabUser: displayName matches', testUser.displayName === 'Alice')
+check('createCollabUser: has a colour', /^#[0-9a-f]{6}$/i.test(testUser.color))
+check('createCollabUser: cursor starts null', testUser.cursor === null)
+check('createCollabUser: lastSeen is a number', typeof testUser.lastSeen === 'number')
+
+// lastWriteWins: timestamp ordering.
+const opOld: CollabOperation = {
+  id: 'op1', type: 'component.moved', projectId: 'p1', userId: 'u1',
+  timestamp: 1000, payload: {}
 }
-console.log('all good')
+const opNew: CollabOperation = {
+  id: 'op2', type: 'component.moved', projectId: 'p1', userId: 'u2',
+  timestamp: 2000, payload: {}
+}
+check('lastWriteWins: newer timestamp wins', lastWriteWins(opOld, opNew) === opNew)
+check('lastWriteWins: equal timestamp favours second', lastWriteWins(opOld, { ...opOld, id: 'op3', timestamp: 1000 }).id === 'op3')
+
+// applyOperationToSpec: structural operations produce new specs without mutating the original.
+const baseSpec = {
+  title: 'Test',
+  summary: 'A test design.',
+  difficulty: 'beginner' as const,
+  components: [
+    { id: 'c1', name: 'Resistor', category: 'Resistor', quantity: 1, pins: ['1', '2'] }
+  ],
+  connections: [],
+  steps: []
+} as unknown as import('../src/shared/types').DesignSpec
+
+const addedOp: CollabOperation = {
+  id: 'op-add', type: 'component.added', projectId: 'p1', userId: 'u2',
+  timestamp: 1000,
+  payload: { component: { id: 'c2', name: 'LED', category: 'LED', quantity: 1, pins: ['A', 'K'] } }
+}
+const specWithAdded = applyOperationToSpec(baseSpec, addedOp)
+check('applyOperationToSpec: component.added adds component', specWithAdded.components.length === 2)
+check('applyOperationToSpec: component.added does not mutate original', baseSpec.components.length === 1)
+
+const removedOp: CollabOperation = {
+  id: 'op-rem', type: 'component.removed', projectId: 'p1', userId: 'u2',
+  timestamp: 1000,
+  payload: { id: 'c1' }
+}
+const specWithRemoved = applyOperationToSpec(specWithAdded, removedOp)
+check('applyOperationToSpec: component.removed removes component', specWithRemoved.components.length === 1)
+check('applyOperationToSpec: removed the right component', specWithRemoved.components[0].id === 'c2')
+
+const movedOp: CollabOperation = {
+  id: 'op-mov', type: 'component.moved', projectId: 'p1', userId: 'u2',
+  timestamp: 1000,
+  payload: { id: 'c2', x: 100, y: 200 }
+}
+const specAfterMove = applyOperationToSpec(specWithRemoved, movedOp)
+check('applyOperationToSpec: component.moved leaves spec unchanged', specAfterMove.components.length === 1)
+
+// ---------------------------------------------------------------------------
+console.log('\nCollaboration: WebSocket server lifecycle')
+// ---------------------------------------------------------------------------
+
+function waitForOpen(ws: WebSocket): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (ws.readyState === WebSocket.OPEN) { resolve(); return }
+    ws.once('open', resolve)
+    ws.once('error', reject)
+  })
+}
+
+/** Collects all WebSocket messages into a queue and can wait for a specific type. */
+function messageCollector(ws: WebSocket): { waitForType: (type: string, timeoutMs?: number) => Promise<unknown> } {
+  const queue: unknown[] = []
+  ws.on('message', (raw: Buffer) => {
+    try { queue.push(JSON.parse(raw.toString('utf-8'))) } catch { /* ignore malformed */ }
+  })
+
+  function waitForType(type: string, timeoutMs = 5000): Promise<unknown> {
+    return new Promise((resolve, reject) => {
+      const poll = () => {
+        const idx = queue.findIndex((m) => (m as { type: string }).type === type)
+        if (idx >= 0) {
+          resolve(queue.splice(idx, 1)[0])
+        } else if (Date.now() < deadline) {
+          setTimeout(poll, 50)
+        } else {
+          reject(new Error(`Timed out waiting for message type: ${type}`))
+        }
+      }
+      const deadline = Date.now() + timeoutMs
+      poll()
+    })
+  }
+
+  return { waitForType }
+}
+
+const startRes = collabServer.start()
+check('collabServer.start: starts on default port', startRes.ok === true, startRes.ok === false ? startRes.error : null)
+const testPort = startRes.port ?? 0
+
+const statusRes = collabServer.status()
+check('collabServer.status: running after start', statusRes.running === true)
+check('collabServer.status: reports port', typeof statusRes.port === 'number' && statusRes.port > 0)
+check('collabServer.status: zero clients initially', statusRes.clientCount === 0)
+
+const doubleStart = collabServer.start()
+check('collabServer.start: double start rejected', doubleStart.ok === false)
+
+// ---------------------------------------------------------------------------
+console.log('\nCollaboration: presence broadcast')
+// ---------------------------------------------------------------------------
+
+async function runPresenceBroadcastTests(): Promise<void> {
+  const ws1 = new WebSocket(`ws://localhost:${testPort}`)
+  const ws2 = new WebSocket(`ws://localhost:${testPort}`)
+  await Promise.all([waitForOpen(ws1), waitForOpen(ws2)])
+
+  // Set up message collectors BEFORE sending join messages so we don't miss
+  // the presence broadcast.
+  const collect1 = messageCollector(ws1)
+  const collect2 = messageCollector(ws2)
+
+  // Both users join the same project room.
+  ws1.send(JSON.stringify({ type: 'join', projectId: 'proj-1', userId: 'alice', displayName: 'Alice' }))
+  ws2.send(JSON.stringify({ type: 'join', projectId: 'proj-1', userId: 'bob', displayName: 'Bob' }))
+
+  // ws2 receives presence with both users (ws1 and ws2).
+  const msg2 = (await collect2.waitForType('presence')) as { type: string; users?: CollabUser[] }
+  check('presence: ws2 receives presence', msg2.type === 'presence' && msg2.users?.length === 2)
+  check('presence: ws2 has alice and bob', msg2.users?.some((u) => u.id === 'alice') && msg2.users?.some((u) => u.id === 'bob'))
+
+  // ws1 receives presence at least once (when it joins).
+  const msg1 = await collect1.waitForType('presence')
+  check('presence: ws1 receives presence', msg1.type === 'presence')
+
+  // Alice leaves; Bob should receive an updated presence with just Bob.
+  ws1.send(JSON.stringify({ type: 'leave', projectId: 'proj-1', userId: 'alice' }))
+  const leaveMsg = (await collect2.waitForType('presence')) as { type: string; users?: CollabUser[] }
+  check('presence: bob alone after alice leaves', leaveMsg.type === 'presence' && leaveMsg.users?.length === 1 && leaveMsg.users?.[0]?.id === 'bob')
+
+  ws1.close()
+  ws2.close()
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nCollaboration: operation broadcast')
+// ---------------------------------------------------------------------------
+
+async function runOperationBroadcastTests(): Promise<void> {
+  const ws1 = new WebSocket(`ws://localhost:${testPort}`)
+  const ws2 = new WebSocket(`ws://localhost:${testPort}`)
+  await Promise.all([waitForOpen(ws1), waitForOpen(ws2)])
+
+  ws1.send(JSON.stringify({ type: 'join', projectId: 'proj-2', userId: 'alice', displayName: 'Alice' }))
+  ws2.send(JSON.stringify({ type: 'join', projectId: 'proj-2', userId: 'bob', displayName: 'Bob' }))
+  // Consume the presence messages so the operation message is next.
+  const collect1 = messageCollector(ws1)
+  const collect2 = messageCollector(ws2)
+  await collect1.waitForType('presence')
+  await collect2.waitForType('presence')
+
+  // Alice sends a component.added operation; Bob should receive it.
+  const operation: CollabOperation = {
+    id: 'op-broadcast', type: 'component.added', projectId: 'proj-2', userId: 'alice',
+    timestamp: 5000,
+    payload: { component: { id: 'c9', name: 'Buzzer', category: 'Output', quantity: 1, pins: ['+', '-'] } }
+  }
+  ws1.send(JSON.stringify({ type: 'operation', operation }))
+
+  const opMsg = (await collect2.waitForType('operation')) as { type: string; operation?: CollabOperation }
+  check('operation: bob receives alice operation', opMsg.type === 'operation' && opMsg.operation?.id === 'op-broadcast')
+  check('operation: payload carried through', opMsg.operation?.payload?.component?.id === 'c9')
+
+  ws1.close()
+  ws2.close()
+}
+
+// ---------------------------------------------------------------------------
+console.log('\nCollaboration: server stop')
+// ---------------------------------------------------------------------------
+
+async function runServerStopTests(): Promise<void> {
+  const stopRes = collabServer.stop()
+  check('collabServer.stop: stops cleanly', stopRes.ok === true)
+
+  const stoppedStatus = collabServer.status()
+  check('collabServer.status: not running after stop', stoppedStatus.running === false)
+  check('collabServer.status: port cleared', stoppedStatus.port === null)
+  check('collabServer.status: zero clients after stop', stoppedStatus.clientCount === 0)
+
+  const doubleStop = collabServer.stop()
+  check('collabServer.stop: double stop rejected', doubleStop.ok === false)
+}
+
+// Run all async collaboration tests, then print the summary.
+;(async () => {
+  await runPresenceBroadcastTests()
+  await runOperationBroadcastTests()
+  await runServerStopTests()
+
+  console.log(`\n${checks - failures}/${checks} checks passed`)
+  if (failures > 0) {
+    console.error(`${failures} FAILED`)
+    process.exit(1)
+  }
+  console.log('all good')
+})()
