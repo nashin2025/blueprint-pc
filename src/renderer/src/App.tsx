@@ -43,6 +43,75 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
     void hydrate()
   }, [hydrate])
 
+  // ---------------------------------------------------------------------------
+  // Offline-first sync
+  // ---------------------------------------------------------------------------
+
+  const [syncStatus, setSyncStatus] = useState<{ online: boolean; pendingEdits: number }>({
+    online: typeof navigator !== 'undefined' ? navigator.onLine : true,
+    pendingEdits: 0
+  })
+  const [editQueue, setEditQueue] = useState<Array<{ id: string; ts: number; op: string; payload: any }>>([])
+
+  // Load persisted edit queue from localStorage
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('blueprint-pc:edit-queue')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (Array.isArray(parsed)) {
+          setEditQueue(parsed)
+          setSyncStatus((s) => ({ ...s, pendingEdits: parsed.length }))
+        }
+      }
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [])
+
+  // Persist edit queue to localStorage whenever it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('blueprint-pc:edit-queue', JSON.stringify(editQueue))
+      setSyncStatus((s) => ({ ...s, pendingEdits: editQueue.length }))
+    } catch {
+      // Ignore localStorage errors
+    }
+  }, [editQueue])
+
+  // Online/offline detection
+  useEffect(() => {
+    const onOnline = async () => {
+      setSyncStatus((s) => ({ ...s, online: true }))
+      if (editQueue.length > 0) {
+        try {
+          if (typeof window !== 'undefined' && window.api?.sync?.flush) {
+            const res = await window.api.sync.flush()
+            if (res.ok) {
+              setEditQueue([])
+            }
+          }
+        } catch {
+          // Sync will retry when online again
+        }
+      }
+    }
+    const onOffline = () => {
+      setSyncStatus((s) => ({ ...s, online: false }))
+    }
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', onOnline)
+      window.addEventListener('offline', onOffline)
+    }
+    return () => {
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('online', onOnline)
+        window.removeEventListener('offline', onOffline)
+      }
+    }
+  }, [editQueue])
+
   const active = projects.find((p) => p.id === activeId) ?? null
   const hasKey = hasApiKey(settings)
 
@@ -211,7 +280,7 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
         )}
 
         {/* Status bar along the bottom of the work area. */}
-        <StatusBar zoom={canvasZoom} errorCount={errorCount} />
+        <StatusBar zoom={canvasZoom} errorCount={errorCount} syncStatus={syncStatus} />
       </main>
 
       {paletteOpen && (

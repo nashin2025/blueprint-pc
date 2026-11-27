@@ -1867,4 +1867,20 @@ export function registerIpc(): void {
       return fail(err)
     }
   })
+
+  ipcMain.handle('sync:status', async () => {
+    try {
+      return { ok: true as const, data: { online: true, pendingEdits: 0 } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('sync:flush', async () => {
+    try {
+      return { ok: true as const, data: { flushed: 0 } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 }

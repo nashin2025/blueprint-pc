@@ -20,6 +20,8 @@ interface StatusBarProps {
   zoom?: number
   /** Number of validation errors to surface. */
   errorCount?: number
+  /** Sync status: online flag and pending edit count. */
+  syncStatus?: { online: boolean; pendingEdits: number }
 }
 
 export default function StatusBar({
@@ -27,7 +29,8 @@ export default function StatusBar({
   cursorY = null,
   units = 'mm',
   zoom = 100,
-  errorCount = 0
+  errorCount = 0,
+  syncStatus
 }: StatusBarProps) {
   const [width, setWidth] = useState(0)
   const [height, setHeight] = useState(0)
@@ -69,6 +72,18 @@ export default function StatusBar({
         >
           {errorCount > 0 ? `${errorCount} error${errorCount === 1 ? '' : 's'}` : 'OK'}
         </span>
+        {syncStatus !== undefined && (
+          <span
+            className={`font-mono rounded-full px-1.5 py-0.5 ${
+              syncStatus.online
+                ? 'bg-ok/10 text-ok border border-ok/30'
+                : 'bg-danger/10 text-danger border border-danger/30'
+            }`}
+          >
+            {syncStatus.online ? '● Online' : '○ Offline'}
+            {syncStatus.pendingEdits > 0 ? ` · ${syncStatus.pendingEdits} pending` : ''}
+          </span>
+        )}
       </div>
     </div>
   )

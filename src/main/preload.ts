@@ -487,6 +487,14 @@ const api = {
       ipcRenderer.invoke('collaboration:stop'),
     status: (): Promise<IpcResult<{ running: boolean; port: number | null; clientCount: number }>> =>
       ipcRenderer.invoke('collaboration:status')
+  },
+
+  // Offline-first sync
+  sync: {
+    status: (): Promise<IpcResult<{ online: boolean; pendingEdits: number }>> =>
+      ipcRenderer.invoke('sync:status'),
+    flush: (): Promise<IpcResult<{ flushed: number }>> =>
+      ipcRenderer.invoke('sync:flush')
   }
 }
 
