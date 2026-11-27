@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import type { ComponentType } from 'react'
-import type { Component, Connection, DesignVersion, DrcSummary, DrcViolation, Footprint, Project, Sheet, SheetPort } from '@shared/types'
+import type { Component, Connection, DesignVersion, DrcSummary, DrcViolation, Footprint, HierarchicalBlock, Project, Sheet, SheetPort } from '@shared/types'
 import { useApp, newId } from '../state/useApp'
 import { DIFFICULTY_LABELS, DIFFICULTY_STYLES, currency, relativeTime } from '../lib/format'
 import { exportBomCsv, exportProjectJson, exportWiringSvg } from '../lib/export'
@@ -27,6 +27,8 @@ import ChatTab from './tabs/ChatTab'
 import InfoTab from './tabs/InfoTab'
 import InspectorPanel from '../components/InspectorPanel'
 import FootprintEditor from '../components/FootprintEditor'
+import HierarchicalBlockEditor from '../components/HierarchicalBlockEditor'
+import HierarchyNavigator from '../components/HierarchyNavigator'
 
 type TabId =
   | 'overview'
@@ -38,6 +40,7 @@ type TabId =
   | 'part'
   | 'sheets'
   | 'footprints'
+  | 'hierarchy'
 
 const TABS: Array<{ id: TabId; label: string; icon: ComponentType<{ size?: number }> }> = [
   { id: 'overview', label: 'OVERVIEW', icon: CircuitIcon },
@@ -48,7 +51,8 @@ const TABS: Array<{ id: TabId; label: string; icon: ComponentType<{ size?: numbe
   { id: 'product', label: 'PRODUCT', icon: SparkIcon },
   { id: 'part', label: 'PART', icon: CircuitIcon },
   { id: 'sheets', label: 'SHEETS', icon: SheetIcon },
-  { id: 'footprints', label: 'FOOTPRINTS', icon: FootprintIcon }
+  { id: 'footprints', label: 'FOOTPRINTS', icon: FootprintIcon },
+  { id: 'hierarchy', label: 'HIERARCHY', icon: CircuitIcon }
 ]
 
 interface ProjectViewProps {
@@ -74,6 +78,10 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
   const [editingFootprint, setEditingFootprint] = useState<Footprint | null>(null)
   /** Id of the currently active sheet in a multi-sheet design. */
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null)
+  /** Current hierarchy breadcrumb path from the root design to the active block. */
+  const [currentHierarchyPath, setCurrentHierarchyPath] = useState<{ id: string; name: string }[]>([])
+  /** Whether the hierarchical block editor dialog is open. */
+  const [hierarchyEditorOpen, setHierarchyEditorOpen] = useState(false)
 
   const spec = project.spec
   const footprints = spec.footprints ?? []
@@ -183,6 +191,60 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
     const nextSheets = sheetIds.map((id) => byId.get(id)).filter((s): s is Sheet => !!s)
     const nextSpec: typeof spec = { ...spec, sheets: nextSheets }
     await upsertProject({ ...project, spec: nextSpec })
+  }
+
+  // -------------------------------------------------------------------------
+  // Hierarchical block handlers
+  // -------------------------------------------------------------------------
+
+  function onOpenHierarchyEditor() {
+    setHierarchyEditorOpen(true)
+  }
+
+  function onEditHierarchicalBlock(_block: HierarchicalBlock) {
+    setHierarchyEditorOpen(true)
+  }
+
+  async function onSaveHierarchicalBlock(block: HierarchicalBlock) {
+    const existing = spec.hierarchicalBlocks ?? []
+    const nextBlocks = existing.some((b) => b.id === block.id)
+      ? existing.map((b) => (b.id === block.id ? block : b))
+      : [...existing, block]
+    const nextSpec: typeof spec = { ...spec, hierarchicalBlocks: nextBlocks }
+    await upsertProject({ ...project, spec: nextSpec })
+    setHierarchyEditorOpen(false)
+  }
+
+  async function onDeleteHierarchicalBlock(blockId: string) {
+    const confirmed = window.confirm(
+      `Delete this hierarchical block? It will be removed from the design.`
+    )
+    if (!confirmed) return
+    const nextBlocks = (spec.hierarchicalBlocks ?? []).filter((b) => b.id !== blockId)
+    // Also remove any component instances of this block from the design.
+    const nextComponents = spec.components.filter(
+      (c) => c.hierarchicalBlockId !== blockId
+    )
+    const nextSpec: typeof spec = {
+      ...spec,
+      hierarchicalBlocks: nextBlocks,
+      components: nextComponents
+    }
+    await upsertProject({ ...project, spec: nextSpec })
+    // If we were viewing this block, go back up.
+    setCurrentHierarchyPath((prev) =>
+      prev.filter((n) => n.id !== blockId)
+    )
+  }
+
+  function onHierarchyDrillDown(blockId: string) {
+    const block = (spec.hierarchicalBlocks ?? []).find((b) => b.id === blockId)
+    if (!block) return
+    setCurrentHierarchyPath((prev) => [...prev, { id: block.id, name: block.name }])
+  }
+
+  function onHierarchyDrillUp() {
+    setCurrentHierarchyPath((prev) => prev.slice(0, -1))
   }
 
   async function onAddConnection(connection: Omit<Connection, 'id'>) {
@@ -493,6 +555,11 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
               onDeleteSheet={onDeleteSheet}
               onReorderSheets={onReorderSheets}
             />
+            <HierarchyNavigator
+              currentPath={currentHierarchyPath}
+              onDrillDown={onHierarchyDrillDown}
+              onDrillUp={onHierarchyDrillUp}
+            />
           </div>
 
           <button
@@ -694,6 +761,95 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
             )}
           </div>
         )}
+        {activeTab === 'hierarchy' && (
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold tracking-tight">Hierarchical Blocks</h3>
+              <button
+                onClick={onOpenHierarchyEditor}
+                className="flex items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-3 py-1.5 text-[13px] text-ink-dim transition hover:border-line-bright hover:text-ink"
+              >
+                <PlusIcon size={13} />
+                Create Block
+              </button>
+            </div>
+            <p className="text-[13px] text-ink-dim mb-4">
+              Hierarchical blocks are reusable sub-circuits. Create one from selected
+              components, then place it as a component in any parent design.
+            </p>
+            {spec.hierarchicalBlocks?.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-center">
+                <div className="mx-auto flex size-10 items-center justify-center rounded-lg border border-line bg-surface-1">
+                  <CircuitIcon size={20} className="text-ink-faint" />
+                </div>
+                <h3 className="mt-3 text-sm font-medium">No hierarchical blocks yet</h3>
+                <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">
+                  Create a block from components in your design to start building modular,
+                  reusable circuits.
+                </p>
+              </div>
+            ) : (
+              <div className="rounded border border-line bg-surface-1 overflow-hidden">
+                <table className="w-full text-left">
+                  <thead>
+                    <tr className="border-b border-line bg-surface-2/60">
+                      <th className="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-ink-faint">Name</th>
+                      <th className="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-ink-faint">Description</th>
+                      <th className="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-ink-faint">Ports</th>
+                      <th className="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-ink-faint">Internal Parts</th>
+                      <th className="px-4 py-3 font-mono text-[10px] uppercase tracking-widest text-ink-faint w-24">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(spec.hierarchicalBlocks ?? []).map((block) => (
+                      <tr key={block.id} className="border-b border-line/60 last:border-0">
+                        <td className="px-4 py-3">
+                          <div className="text-[13px] font-medium">{block.name}</div>
+                        </td>
+                        <td className="px-4 py-3 text-[12px] text-ink-faint">
+                          {block.description ?? '—'}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[12px] text-ink-dim">
+                          {block.ports.length}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-[12px] text-ink-dim">
+                          {block.spec.components.length}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={() => onEditHierarchicalBlock(block)}
+                              title="Edit block"
+                              className="rounded p-1.5 text-ink-faint transition hover:bg-surface-3 hover:text-accent"
+                            >
+                              <EditIcon size={12} />
+                            </button>
+                            <button
+                              onClick={() => onHierarchyDrillDown(block.id)}
+                              title="Drill into block"
+                              className="rounded p-1.5 text-ink-faint transition hover:bg-surface-3 hover:text-accent"
+                            >
+                              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+                                <circle cx="12" cy="12" r="1" /><path d="M9 12l2 2 4-4" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => onDeleteHierarchicalBlock(block.id)}
+                              title="Delete block"
+                              className="rounded p-1.5 text-ink-faint transition hover:bg-danger/5 hover:text-danger"
+                            >
+                              <TrashIcon size={12} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {inspectorComponent && (
@@ -787,6 +943,20 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
               footprint={editingFootprint ?? undefined}
               onSave={editingFootprint ? onUpdateFootprint : onAddFootprint}
               onCancel={() => setEditorOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+      {hierarchyEditorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm" onClick={() => setHierarchyEditorOpen(false)} />
+          <div className="relative z-10 w-full max-w-3xl p-4 bg-surface-0 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <HierarchicalBlockEditor
+              spec={spec}
+              blocks={spec.hierarchicalBlocks ?? []}
+              onSave={onSaveHierarchicalBlock}
+              onCancel={() => setHierarchyEditorOpen(false)}
+              onEditBlock={onHierarchyDrillDown}
             />
           </div>
         </div>

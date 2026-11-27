@@ -11,7 +11,7 @@ import CommandPalette from './components/CommandPalette'
 import StatusBar from './components/StatusBar'
 import CartDrawer from './components/CartDrawer'
 
-type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part' | 'sheets' | 'footprints'
+type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part' | 'sheets' | 'footprints' | 'hierarchy'
 
 const TABS_ORDER: TabId[] = [
   'overview',
@@ -63,7 +63,8 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
       product: 'Product',
       part: 'Part',
       sheets: 'Sheets',
-      footprints: 'Footprints'
+      footprints: 'Footprints',
+      hierarchy: 'Hierarchy'
     }
     const actions: Array<{
       id: string
@@ -202,7 +203,7 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
             key={active.id}
             project={active}
             activeTab={activeTab}
-            onTabChange={setActiveTab}
+            onTabChange={(tab) => setActiveTab(tab)}
             onCanvasZoom={useApp.getState().setCanvasZoom}
           />
         ) : (

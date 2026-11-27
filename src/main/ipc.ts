@@ -17,10 +17,11 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, Component, Connection, DesignSpec, Footprint, GenerateRequest, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
+import type { AppSettings, Component, Connection, DesignSpec, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
+import { flattenHierarchy, expandBlockInPlace, validateBlock } from './hierarchical-design'
 import { getDrcRules, saveDrcRules } from './drc-rules'
 import { placeComponents, attachPads, routeTraces } from './pcb-layout'
 import type { PcbPad, PcbVia } from './pcb-layout'
@@ -325,6 +326,135 @@ export function registerIpc(): void {
       }
     }
   )
+
+  // -------------------------------------------------------------------------
+  // Hierarchical design (sub-circuits)
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('hierarchical:create-block', async (_e, args: { projectId: string; block: HierarchicalBlock }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+
+      const nextBlocks = [...(project.spec.hierarchicalBlocks ?? []), args.block]
+      const validation = validateBlock({ ...project.spec, hierarchicalBlocks: nextBlocks })
+      if (!validation.valid) {
+        return { ok: false, error: `Invalid block: ${validation.errors.join('; ')}` }
+      }
+
+      const nextSpec: DesignSpec = { ...project.spec, hierarchicalBlocks: nextBlocks }
+      const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next, block: args.block } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('hierarchical:save-block', async (_e, args: { projectId: string; block: HierarchicalBlock }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+
+      const nextBlocks = (project.spec.hierarchicalBlocks ?? []).map((b) =>
+        b.id === args.block.id ? args.block : b
+      )
+      const validation = validateBlock({ ...project.spec, hierarchicalBlocks: nextBlocks })
+      if (!validation.valid) {
+        return { ok: false, error: `Invalid block: ${validation.errors.join('; ')}` }
+      }
+
+      const nextSpec: DesignSpec = { ...project.spec, hierarchicalBlocks: nextBlocks }
+      const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('hierarchical:delete-block', async (_e, args: { projectId: string; blockId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+
+      const block = (project.spec.hierarchicalBlocks ?? []).find((b) => b.id === args.blockId)
+      if (!block) return { ok: false, error: `Block not found: ${args.blockId}` }
+
+      const nextBlocks = (project.spec.hierarchicalBlocks ?? []).filter((b) => b.id !== args.blockId)
+      // Remove any component instances of this block from the design.
+      const nextComponents = project.spec.components.filter(
+        (c) => c.hierarchicalBlockId !== args.blockId
+      )
+      const nextSpec: DesignSpec = {
+        ...project.spec,
+        hierarchicalBlocks: nextBlocks,
+        components: nextComponents
+      }
+      const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('hierarchical:expand-block', async (_e, args: { projectId: string; componentId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+
+      const comp = project.spec.components.find((c) => c.id === args.componentId)
+      if (!comp || !comp.hierarchicalBlockId) {
+        return { ok: false, error: `Component ${args.componentId} is not a hierarchical block instance` }
+      }
+
+      const nextSpec = expandBlockInPlace(project.spec, args.componentId)
+      const validation = validateBlock(nextSpec)
+      if (!validation.valid) {
+        return { ok: false, error: `Expanded design is invalid: ${validation.errors.join('; ')}` }
+      }
+
+      const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('hierarchical:get-block', async (_e, args: { projectId: string; blockId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+
+      const block = (project.spec.hierarchicalBlocks ?? []).find((b) => b.id === args.blockId)
+      if (!block) return { ok: false, error: `Block not found: ${args.blockId}` }
+
+      return { ok: true as const, data: { block } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('hierarchical:flatten', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+
+      const flat = flattenHierarchy(project.spec)
+      const validation = validateBlock(flat)
+      if (!validation.valid) {
+        return { ok: false, error: `Flattened design is invalid: ${validation.errors.join('; ')}` }
+      }
+
+      const next: Project = { ...project, spec: flat, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
 
   ipcMain.handle('projects:read-file', async (_e, filePath: string) => {
     try {

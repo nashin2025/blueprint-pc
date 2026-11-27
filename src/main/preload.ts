@@ -11,6 +11,7 @@ import type {
   DrcViolation,
   Footprint,
   GenerateRequest,
+  HierarchicalBlock,
   InfoRequest,
   IpcResult,
   ModelDownloadProgress,
@@ -199,6 +200,35 @@ const api = {
     portId2: string
   }): Promise<IpcResult<{ project: Project; connection: Connection }>> =>
     ipcRenderer.invoke('sheets:connect-port', args),
+
+  // Hierarchical design
+  hierarchicalCreateBlock: (args: {
+    projectId: string
+    block: HierarchicalBlock
+  }): Promise<IpcResult<{ project: Project; block: HierarchicalBlock }>> =>
+    ipcRenderer.invoke('hierarchical:create-block', args),
+  hierarchicalSaveBlock: (args: {
+    projectId: string
+    block: HierarchicalBlock
+  }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('hierarchical:save-block', args),
+  hierarchicalDeleteBlock: (args: {
+    projectId: string
+    blockId: string
+  }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('hierarchical:delete-block', args),
+  hierarchicalExpandBlock: (args: {
+    projectId: string
+    componentId: string
+  }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('hierarchical:expand-block', args),
+  hierarchicalGetBlock: (args: {
+    projectId: string
+    blockId: string
+  }): Promise<IpcResult<{ block: HierarchicalBlock }>> =>
+    ipcRenderer.invoke('hierarchical:get-block', args),
+  hierarchicalFlatten: (projectId: string): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('hierarchical:flatten', projectId),
 
   // Footprints
   footprintsAdd: (args: { projectId: string; footprint: Footprint }): Promise<IpcResult<{ project: Project }>> =>

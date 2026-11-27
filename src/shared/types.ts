@@ -40,6 +40,9 @@ export interface Component {
   footprintId?: string
   pins: string[]
   notes?: string
+  /** When set, this component is an instance of a hierarchical block rather than
+   *  a plain part. Its pins correspond to the block's port names. */
+  hierarchicalBlockId?: string
 }
 
 /** One solder pad in a component footprint (land pattern). All values in mm. */
@@ -115,6 +118,36 @@ export interface SheetPort {
   direction: 'input' | 'output'
 }
 
+/** Maps an external block port name to an internal component pin reference. */
+export interface PortMapping {
+  componentId: string
+  pin: string
+}
+
+/** One port on a hierarchical block. Maps an external-facing port name to an
+ *  internal pin name inside the block's sub-circuit. */
+export interface HierarchicalBlockPort {
+  id: string
+  name: string
+  type: 'input' | 'output'
+  /** The component id inside the block's internal spec that this port connects to. */
+  componentId: string
+  /** The pin name inside the block's internal spec that this port connects to. */
+  pinName: string
+}
+
+/** A reusable sub-circuit that can be placed as a component in a parent design.
+ *  The block carries its own internal DesignSpec and a set of ports that define
+ *  how it connects to the outside world. */
+export interface HierarchicalBlock {
+  id: string
+  name: string
+  description?: string
+  spec: DesignSpec
+  ports: HierarchicalBlockPort[]
+  thumbnailUrl?: string
+}
+
 /** One sheet in a multi-sheet schematic. Groups connections and ports. */
 export interface Sheet {
   id: string
@@ -167,6 +200,9 @@ export interface DesignSpec {
   ports?: SheetPort[]
   /** Component footprints (land patterns) available to this design. */
   footprints?: Footprint[]
+  /** Reusable sub-circuits defined within this design. Each block can be placed
+   *  as a component instance in the parent design and drilled into for editing. */
+  hierarchicalBlocks?: HierarchicalBlock[]
 }
 
 export type ChatRole = 'user' | 'assistant'
