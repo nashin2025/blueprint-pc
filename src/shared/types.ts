@@ -179,6 +179,63 @@ export interface BomItem {
   url?: string
 }
 
+/** An alternate part for a component (substitute). */
+export interface BomAlternative {
+  /** Reference designator this alternate applies to. */
+  designator: string
+  /** Alternate part number. */
+  partNumber: string
+  /** Alternate manufacturer/brand. */
+  manufacturer: string | null
+  /** Alternate footprint (if different from primary). */
+  footprintId: string | null
+  /** Reason for the alternate (e.g. 'obsolescence', 'cost', 'region'). */
+  reason: string | null
+  /** Unit price of the alternate (if known). */
+  unitPrice: number | null
+  /** Currency of the alternate price. */
+  unitPriceCurrency: string
+  /** Lead time in days. */
+  leadTimeDays: number | null
+  /** URL to the alternate part page. */
+  url: string | null
+}
+
+/** A design variant: a named set of component overrides applied to a base design. */
+export interface Variant {
+  id: string
+  name: string
+  description: string | null
+  /** Base variant this variant is derived from (null for the base variant). */
+  baseVariantId: string | null
+  /** Component overrides: designator -> override values. */
+  componentOverrides: Array<{
+    designator: string
+    partNumber: string | null
+    footprintId: string | null
+    unitPrice: number | null
+    notes: string | null
+  }>
+  /** Whether this variant is active (used for BOM generation). */
+  active: boolean
+}
+
+/** A BOM line item for a specific variant. */
+export interface BomLineItem {
+  designator: string
+  partNumber: string | null
+  manufacturer: string | null
+  footprintId: string | null
+  quantity: number
+  unitPrice: number | null
+  unitPriceCurrency: string
+  extendedPrice: number | null
+  source: 'primary' | 'alternate' | 'override'
+  alternateReason: string | null
+  leadTimeDays: number | null
+  url: string | null
+}
+
 export interface DesignSpec {
   title: string
   summary: string

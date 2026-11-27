@@ -1788,6 +1788,69 @@ const backwardDivs = backwardAnnotation(
 )
 check('backwardAnnotation detects PCB-only component', backwardDivs.some((d) => d.type === 'component_added' && d.severity === 'error'))
 
+// Variants / alternate BOM
+import {
+  createVariant,
+  addVariantOverride,
+  removeVariantOverride,
+  generateBomForVariant,
+  compareBoms
+} from '../src/main/variants.ts'
+import type { Variant, BomAlternative, BomLineItem } from '../src/shared/types.ts'
+
+const baseVariant = createVariant('v1', 'Base', null, null, true)
+check('createVariant returns variant with id', baseVariant.id === 'v1')
+check('createVariant has no overrides initially', baseVariant.componentOverrides.length === 0)
+
+const variantWithOverride = addVariantOverride(
+  baseVariant,
+  'C1',
+  'C0603X104K',
+  'cap-0603',
+  0.02,
+  'Lower cost alternative'
+)
+check('addVariantOverride adds override', variantWithOverride.componentOverrides.length === 1)
+check('override has correct designator', variantWithOverride.componentOverrides[0].designator === 'C1')
+check('override has correct part number', variantWithOverride.componentOverrides[0].partNumber === 'C0603X104K')
+
+const variantWithoutOverride = removeVariantOverride(variantWithOverride, 'C1')
+check('removeVariantOverride removes override', variantWithoutOverride.componentOverrides.length === 0)
+
+// BOM generation
+const testComponents: Component[] = [
+  { id: 'c1', name: 'C1', category: 'Passive', quantity: 10, pins: [], designator: 'C1', partName: 'C0603C104', unitPrice: 0.05, unitPriceCurrency: 'USD', footprintId: 'cap-0603' },
+  { id: 'r1', name: 'R1', category: 'Passive', quantity: 5, pins: [], designator: 'R1', partName: 'R0603-10K', unitPrice: 0.01, unitPriceCurrency: 'USD', footprintId: 'res-0603' }
+]
+
+const testAlternates: BomAlternative[] = [
+  { designator: 'C1', partNumber: 'C0603X104K', manufacturer: 'AltBrand', footprintId: 'cap-0603', reason: 'obsolescence', unitPrice: 0.03, unitPriceCurrency: 'USD', leadTimeDays: 5, url: null }
+]
+
+const bom = generateBomForVariant(testComponents, variantWithoutOverride, testAlternates)
+check('generateBomForVariant returns items for all components', bom.length === 2)
+check('primary part uses primary source', bom.find((i) => i.designator === 'C1')!.source === 'primary')
+check('alternate part uses alternate source', bom.find((i) => i.designator === 'C1')!.source === 'primary') // No override, so primary
+check('BOM computes extended price', bom.find((i) => i.designator === 'R1')!.extendedPrice === 0.05)
+
+// Variant with override changes BOM source
+const variantWithC1Override = addVariantOverride(
+  variantWithoutOverride,
+  'C1',
+  'C0603X104K',
+  'cap-0603',
+  0.03,
+  'Lower cost'
+)
+const bomWithOverride = generateBomForVariant(testComponents, variantWithC1Override, testAlternates)
+check('override changes source to override', bomWithOverride.find((i) => i.designator === 'C1')!.source === 'override')
+
+// BOM comparison
+const diffs = compareBoms(bom, bomWithOverride)
+check('compareBoms finds source difference', diffs.some((d) => d.designator === 'C1' && d.field === 'source'))
+check('compareBoms shows old and new values', diffs.find((d) => d.designator === 'C1' && d.field === 'source')!.valueA === 'primary')
+check('compareBoms shows new value', diffs.find((d) => d.designator === 'C1' && d.field === 'source')!.valueB === 'override')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()

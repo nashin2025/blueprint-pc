@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CartItem } from '@shared/types'
+import type { CartItem, Component } from '@shared/types'
 import type {
   AppSettings,
   CadDiscoveryProgress,
@@ -25,7 +25,10 @@ import type {
   SyncProgress,
   CrosstalkResult,
   ThermalResult,
-  LibraryHealthReport
+  LibraryHealthReport,
+  Variant,
+  BomAlternative,
+  BomLineItem
 } from '@shared/types'
 
 /**
@@ -335,6 +338,46 @@ const api = {
     projectId: string
   }): Promise<IpcResult<{ divergences: Array<{ type: string; componentId: string; designator: string; message: string; severity: string }> }>> =>
     ipcRenderer.invoke('annotation:backward', args),
+
+  // Variants / alternate BOM
+  variantsCreate: (args: {
+    id: string
+    name: string
+    description: string | null
+    baseVariantId: string | null
+    active: boolean
+  }): Promise<IpcResult<{ variant: Variant }>> =>
+    ipcRenderer.invoke('variants:create', args),
+  variantsAddOverride: (args: {
+    variant: Variant
+    designator: string
+    partNumber: string | null
+    footprintId: string | null
+    unitPrice: number | null
+    notes: string | null
+  }): Promise<IpcResult<{ variant: Variant }>> =>
+    ipcRenderer.invoke('variants:add-override', args),
+  variantsRemoveOverride: (args: {
+    variant: Variant
+    designator: string
+  }): Promise<IpcResult<{ variant: Variant }>> =>
+    ipcRenderer.invoke('variants:remove-override', args),
+  variantsGenerateBom: (args: {
+    components: Component[]
+    variant: Variant
+    alternates: BomAlternative[]
+  }): Promise<IpcResult<{ bom: BomLineItem[] }>> =>
+    ipcRenderer.invoke('variants:generate-bom', args),
+  variantsCompareBoms: (args: {
+    bomA: BomLineItem[]
+    bomB: BomLineItem[]
+  }): Promise<IpcResult<{ diffs: Array<{
+    designator: string
+    field: string
+    valueA: string | null
+    valueB: string | null
+  }> }>> =>
+    ipcRenderer.invoke('variants:compare-boms', args),
 
   // Footprints
   footprintsAdd: (args: { projectId: string; footprint: Footprint }): Promise<IpcResult<{ project: Project }>> =>

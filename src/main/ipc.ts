@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, Component, Connection, DesignSpec, DielectricStackup, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, LibraryHealthReport, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
+import type { AppSettings, BomAlternative, BomLineItem, Component, Connection, DesignSpec, DielectricStackup, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, LibraryHealthReport, PcbDesignRules, Project, Sheet, SheetPort, Variant } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -37,6 +37,13 @@ import {
   backwardAnnotation
 } from './annotation'
 import type { AnnotationLink, AnnotationDivergence } from './annotation'
+import {
+  createVariant,
+  addVariantOverride,
+  removeVariantOverride,
+  generateBomForVariant,
+  compareBoms
+} from './variants'
 import { checkComponentClearance, checkBoardEdgeClearance } from './mech-clearance'
 import { collabServer } from './collaboration'
 import {
@@ -1038,6 +1045,81 @@ export function registerIpc(): void {
       if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
       const divergences = backwardAnnotation(args.pcbPlacements, project.spec.components)
       return { ok: true as const, data: { divergences } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('variants:create', async (_e, args: {
+    id: string
+    name: string
+    description: string | null
+    baseVariantId: string | null
+    active: boolean
+  }) => {
+    try {
+      const variant = createVariant(args.id, args.name, args.description, args.baseVariantId, args.active)
+      return { ok: true as const, data: { variant } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('variants:add-override', async (_e, args: {
+    variant: Variant
+    designator: string
+    partNumber: string | null
+    footprintId: string | null
+    unitPrice: number | null
+    notes: string | null
+  }) => {
+    try {
+      const variant = addVariantOverride(
+        args.variant,
+        args.designator,
+        args.partNumber,
+        args.footprintId,
+        args.unitPrice,
+        args.notes
+      )
+      return { ok: true as const, data: { variant } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('variants:remove-override', async (_e, args: {
+    variant: Variant
+    designator: string
+  }) => {
+    try {
+      const variant = removeVariantOverride(args.variant, args.designator)
+      return { ok: true as const, data: { variant } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('variants:generate-bom', async (_e, args: {
+    components: Component[]
+    variant: Variant
+    alternates: BomAlternative[]
+  }) => {
+    try {
+      const bom = generateBomForVariant(args.components, args.variant, args.alternates)
+      return { ok: true as const, data: { bom } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('variants:compare-boms', async (_e, args: {
+    bomA: BomLineItem[]
+    bomB: BomLineItem[]
+  }) => {
+    try {
+      const diffs = compareBoms(args.bomA, args.bomB)
+      return { ok: true as const, data: { diffs } }
     } catch (err) {
       return fail(err)
     }
