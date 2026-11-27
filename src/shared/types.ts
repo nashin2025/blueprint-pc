@@ -48,6 +48,30 @@ export interface Connection {
   /** Net name, e.g. "5V", "GND", "SDA". Used for rail inference and labels. */
   net?: string
   label?: string
+  /** Optional sheet this connection lives on (multi-sheet designs). */
+  sheetId?: string
+}
+
+/** A connection point on a sheet that can link to a port on another sheet. */
+export interface SheetPort {
+  id: string
+  sheetId: string
+  name: string
+  x: number
+  y: number
+  direction: 'input' | 'output'
+}
+
+/** One sheet in a multi-sheet schematic. Groups connections and ports. */
+export interface Sheet {
+  id: string
+  name: string
+  x: number
+  y: number
+  width: number
+  height: number
+  connectionIds: string[]
+  portIds: string[]
 }
 
 export interface AssemblyStep {
@@ -84,6 +108,10 @@ export interface DesignSpec {
   imageFile?: string
   /** Longer, page-style description of the finished product. */
   infoSummary?: string
+  /** Sheets in a multi-sheet design. Each sheet groups connections and ports. */
+  sheets?: Sheet[]
+  /** Sheet-to-sheet port connectors. */
+  ports?: SheetPort[]
 }
 
 export type ChatRole = 'user' | 'assistant'

@@ -49,6 +49,15 @@ export function CircuitIcon({ size = 16, className }: IconProps) {
   )
 }
 
+export function SheetIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="3" y="3" width="12" height="18" rx="1" />
+      <path d="M3 7h18M3 11h12M3 15h9" />
+    </svg>
+  )
+}
+
 export function ListIcon({ size = 16, className }: IconProps) {
   return (
     <svg {...base(size, className)}>

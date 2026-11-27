@@ -5,6 +5,7 @@ import type {
   CadDiscoveryProgress,
   CataloguePart,
   CatalogueSummary,
+  Connection,
   DesignSpec,
   DesignVersion,
   GenerateRequest,
@@ -14,6 +15,8 @@ import type {
   ModelLookup,
   OfferResult,
   Project,
+  Sheet,
+  SheetPort,
   SyncProgress
 } from '@shared/types'
 
@@ -154,7 +157,28 @@ const api = {
     ipcRenderer.invoke('design:diff-versions', args),
 
   designExportNetlist: (projectId: string): Promise<IpcResult<{ netlist: string }>> =>
-    ipcRenderer.invoke('design:export-netlist', projectId)
+    ipcRenderer.invoke('design:export-netlist', projectId),
+
+  // Sheets
+  sheetsAddSheet: (projectId: string, name: string): Promise<IpcResult<{ project: Project; sheet: Sheet }>> =>
+    ipcRenderer.invoke('sheets:add-sheet', { projectId, name }),
+  sheetsRenameSheet: (projectId: string, sheetId: string, name: string): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('sheets:rename-sheet', { projectId, sheetId, name }),
+  sheetsDeleteSheet: (projectId: string, sheetId: string): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('sheets:delete-sheet', { projectId, sheetId }),
+  sheetsAddPort: (args: {
+    projectId: string
+    sheetId: string
+    name: string
+    direction: 'input' | 'output'
+  }): Promise<IpcResult<{ project: Project; port: SheetPort }>> =>
+    ipcRenderer.invoke('sheets:add-port', args),
+  sheetsConnectPort: (args: {
+    projectId: string
+    portId1: string
+    portId2: string
+  }): Promise<IpcResult<{ project: Project; connection: Connection }>> =>
+    ipcRenderer.invoke('sheets:connect-port', args)
 }
 
 export type Bridge = typeof api

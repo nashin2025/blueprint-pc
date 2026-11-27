@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, DesignSpec, GenerateRequest, InfoRequest, PcbDesignRules, Project } from '@shared/types'
+import type { AppSettings, Connection, DesignSpec, GenerateRequest, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -152,6 +152,153 @@ export function registerIpc(): void {
       return fail(err)
     }
   })
+
+  // -------------------------------------------------------------------------
+  // Multi-sheet schematic support
+  // -------------------------------------------------------------------------
+
+  ipcMain.handle('sheets:add-sheet', async (_e, args: { projectId: string; name: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const sheet: Sheet = {
+        id: randomUUID(),
+        name: args.name,
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 150,
+        connectionIds: [],
+        portIds: []
+      }
+      const nextSpec: DesignSpec = {
+        ...project.spec,
+        sheets: [...(project.spec.sheets ?? []), sheet]
+      }
+      const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next, sheet } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    'sheets:rename-sheet',
+    async (_e, args: { projectId: string; sheetId: string; name: string }) => {
+      try {
+        const project = store.get(args.projectId)
+        if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+        const nextSheets = (project.spec.sheets ?? []).map((s) =>
+          s.id === args.sheetId ? { ...s, name: args.name } : s
+        )
+        const nextSpec: DesignSpec = { ...project.spec, sheets: nextSheets }
+        const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+        store.save(next)
+        return { ok: true as const, data: { project: next } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle('sheets:delete-sheet', async (_e, args: { projectId: string; sheetId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const sheet = (project.spec.sheets ?? []).find((s) => s.id === args.sheetId)
+      if (!sheet) return { ok: false, error: `Sheet not found: ${args.sheetId}` }
+      const nextSheets = (project.spec.sheets ?? []).filter((s) => s.id !== args.sheetId)
+      const nextConnections = project.spec.connections.filter(
+        (c) => c.sheetId !== args.sheetId && !sheet.connectionIds.includes(c.id)
+      )
+      const nextPorts = (project.spec.ports ?? []).filter((p) => p.sheetId !== args.sheetId)
+      const nextSpec: DesignSpec = {
+        ...project.spec,
+        sheets: nextSheets,
+        connections: nextConnections,
+        ports: nextPorts
+      }
+      const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+      store.save(next)
+      return { ok: true as const, data: { project: next } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle(
+    'sheets:add-port',
+    async (_e, args: { projectId: string; sheetId: string; name: string; direction: 'input' | 'output' }) => {
+      try {
+        const project = store.get(args.projectId)
+        if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+        const port: SheetPort = {
+          id: randomUUID(),
+          sheetId: args.sheetId,
+          name: args.name,
+          x: 0,
+          y: 0,
+          direction: args.direction
+        }
+        const nextSheets = (project.spec.sheets ?? []).map((s) =>
+          s.id === args.sheetId ? { ...s, portIds: [...s.portIds, port.id] } : s
+        )
+        const nextSpec: DesignSpec = {
+          ...project.spec,
+          sheets: nextSheets,
+          ports: [...(project.spec.ports ?? []), port]
+        }
+        const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+        store.save(next)
+        return { ok: true as const, data: { project: next, port } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
+
+  ipcMain.handle(
+    'sheets:connect-port',
+    async (_e, args: { projectId: string; portId1: string; portId2: string }) => {
+      try {
+        const project = store.get(args.projectId)
+        if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+        const ports = project.spec.ports ?? []
+        const p1 = ports.find((p) => p.id === args.portId1)
+        const p2 = ports.find((p) => p.id === args.portId2)
+        if (!p1 || !p2) return { ok: false, error: 'One or both ports not found' }
+        if (p1.direction === p2.direction) {
+          return { ok: false, error: 'Cannot connect two ports of the same direction' }
+        }
+        const connection: Connection = {
+          id: randomUUID(),
+          sheetId: p1.sheetId,
+          from: { componentId: p1.id, pin: p1.name },
+          to: { componentId: p2.id, pin: p2.name },
+          kind: 'signal',
+          net: `sheet-link:${p1.id}:${p2.id}`
+        }
+        // Register the logical connection on every sheet it touches.
+        const nextSheets = (project.spec.sheets ?? []).map((s) => {
+          const ids = [...s.connectionIds]
+          if (s.id === p1.sheetId && !ids.includes(connection.id)) ids.push(connection.id)
+          if (s.id === p2.sheetId && !ids.includes(connection.id)) ids.push(connection.id)
+          return { ...s, connectionIds: ids }
+        })
+        const nextSpec: DesignSpec = {
+          ...project.spec,
+          sheets: nextSheets,
+          connections: [...project.spec.connections, connection]
+        }
+        const next: Project = { ...project, spec: nextSpec, updatedAt: Date.now() }
+        store.save(next)
+        return { ok: true as const, data: { project: next, connection } }
+      } catch (err) {
+        return fail(err)
+      }
+    }
+  )
 
   ipcMain.handle('projects:read-file', async (_e, filePath: string) => {
     try {

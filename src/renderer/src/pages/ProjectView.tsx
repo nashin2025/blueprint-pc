@@ -1,20 +1,22 @@
 import { useState, useEffect } from 'react'
 import type { ComponentType } from 'react'
-import type { Component, DesignVersion, DrcSummary, DrcViolation, Project } from '@shared/types'
-import { useApp } from '../state/useApp'
+import type { Component, Connection, DesignVersion, DrcSummary, DrcViolation, Project, Sheet, SheetPort } from '@shared/types'
+import { useApp, newId } from '../state/useApp'
 import { DIFFICULTY_LABELS, DIFFICULTY_STYLES, currency, relativeTime } from '../lib/format'
 import { exportBomCsv, exportProjectJson, exportWiringSvg } from '../lib/export'
-import { CircuitIcon, DownloadIcon, ListIcon, ChatIcon, TrashIcon, SparkIcon } from '../components/Icons'
+import { CircuitIcon, DownloadIcon, ListIcon, ChatIcon, TrashIcon, SparkIcon, SheetIcon } from '../components/Icons'
 import OverviewTab from './tabs/OverviewTab'
 import PartsTab from './tabs/PartsTab'
 import WiringTab from './tabs/WiringTab'
 import MechTab from './tabs/MechTab'
+import SheetTab from './tabs/SheetTab'
+import SheetSelector from '../components/SheetSelector'
 import PartTab from './tabs/PartTab'
 import ChatTab from './tabs/ChatTab'
 import InfoTab from './tabs/InfoTab'
 import InspectorPanel from '../components/InspectorPanel'
 
-type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part'
+type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part' | 'sheets'
 
 const TABS: Array<{ id: TabId; label: string; icon: ComponentType<{ size?: number }> }> = [
   { id: 'overview', label: 'OVERVIEW', icon: CircuitIcon },
@@ -23,7 +25,8 @@ const TABS: Array<{ id: TabId; label: string; icon: ComponentType<{ size?: numbe
   { id: 'mech', label: 'MECH', icon: CircuitIcon },
   { id: 'chat', label: 'CHAT', icon: ChatIcon },
   { id: 'product', label: 'PRODUCT', icon: SparkIcon },
-  { id: 'part', label: 'PART', icon: CircuitIcon }
+  { id: 'part', label: 'PART', icon: CircuitIcon },
+  { id: 'sheets', label: 'SHEETS', icon: SheetIcon }
 ]
 
 interface ProjectViewProps {
@@ -44,6 +47,8 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
   const [drcChecking, setDrcChecking] = useState(false)
   const [versionDialogOpen, setVersionDialogOpen] = useState(false)
   const [versions, setVersions] = useState<DesignVersion[]>([])
+  /** Id of the currently active sheet in a multi-sheet design. */
+  const [activeSheetId, setActiveSheetId] = useState<string | null>(null)
 
   const spec = project.spec
   const partsCost = spec.components.reduce((sum, c) => sum + (c.unitPrice ?? 0) * c.quantity, 0)
@@ -75,6 +80,70 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
     const nextSpec: typeof spec = { ...spec, components: nextComponents }
     await upsertProject({ ...project, spec: nextSpec })
     setInspectorComponent(null)
+  }
+
+  async function onSheetChange(sheetId: string) {
+    setActiveSheetId(sheetId)
+  }
+
+  async function onAddSheet(name: string) {
+    const nextSheets = [
+      ...(spec.sheets ?? []),
+      { id: newId('sheet'), name, x: 0, y: 0, width: 200, height: 150, connectionIds: [], portIds: [] }
+    ]
+    const nextSpec: typeof spec = { ...spec, sheets: nextSheets }
+    await upsertProject({ ...project, spec: nextSpec })
+    setActiveSheetId(nextSheets[nextSheets.length - 1].id)
+  }
+
+  async function onRenameSheet(sheetId: string, name: string) {
+    const nextSheets = (spec.sheets ?? []).map((s) =>
+      s.id === sheetId ? { ...s, name } : s
+    )
+    const nextSpec: typeof spec = { ...spec, sheets: nextSheets }
+    await upsertProject({ ...project, spec: nextSpec })
+  }
+
+  async function onDeleteSheet(sheetId: string) {
+    const sheet = (spec.sheets ?? []).find((s) => s.id === sheetId)
+    if (!sheet) return
+    const nextSheets = (spec.sheets ?? []).filter((s) => s.id !== sheetId)
+    // Remove connections that belong to this sheet, and ports owned by it.
+    const nextConnections = spec.connections.filter(
+      (c) => c.sheetId !== sheetId && !sheet.connectionIds.includes(c.id)
+    )
+    const nextPorts = (spec.ports ?? []).filter((p) => p.sheetId !== sheetId)
+    const nextSpec: typeof spec = {
+      ...spec,
+      sheets: nextSheets,
+      connections: nextConnections,
+      ports: nextPorts
+    }
+    await upsertProject({ ...project, spec: nextSpec })
+    setActiveSheetId((prev) => (prev === sheetId ? (nextSheets[0]?.id ?? null) : prev))
+  }
+
+  async function onReorderSheets(sheetIds: string[]) {
+    const byId = new Map((spec.sheets ?? []).map((s) => [s.id, s]))
+    const nextSheets = sheetIds.map((id) => byId.get(id)).filter((s): s is Sheet => !!s)
+    const nextSpec: typeof spec = { ...spec, sheets: nextSheets }
+    await upsertProject({ ...project, spec: nextSpec })
+  }
+
+  async function onAddConnection(connection: Omit<Connection, 'id'>) {
+    const nextSpec: typeof spec = {
+      ...spec,
+      connections: [...spec.connections, { ...connection, id: newId('conn') }]
+    }
+    await upsertProject({ ...project, spec: nextSpec })
+  }
+
+  async function onAddPort(port: Omit<SheetPort, 'id'>) {
+    const nextSpec: typeof spec = {
+      ...spec,
+      ports: [...(spec.ports ?? []), { ...port, id: newId('port') }]
+    }
+    await upsertProject({ ...project, spec: nextSpec })
   }
 
   async function checkDrc() {
@@ -360,109 +429,119 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
               )}
             </div>
 
-            <button
-              onClick={checkDrc}
-              disabled={drcChecking}
-              className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-dim transition hover:bg-surface-1 hover:text-ink"
-            >
-              {drcChecking ? (
-                <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
-              ) : (
-                <span>Check DRC</span>
-              )}
-            </button>
-            <button
-              onClick={() => {
-                setVersionDialogOpen(true)
-                void loadVersions()
-              }}
-              className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-dim transition hover:bg-surface-1 hover:text-ink"
-            >
-              <ListIcon size={14} />
-              Versions
-            </button>
+            <SheetSelector
+              sheets={spec.sheets ?? []}
+              activeSheetId={activeSheetId}
+              onSheetChange={onSheetChange}
+              onAddSheet={onAddSheet}
+              onRenameSheet={onRenameSheet}
+              onDeleteSheet={onDeleteSheet}
+              onReorderSheets={onReorderSheets}
+            />
+          </div>
 
+          <button
+            onClick={checkDrc}
+            disabled={drcChecking}
+            className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-dim transition hover:bg-surface-1 hover:text-ink"
+          >
+            {drcChecking ? (
+              <span className="inline-block size-3 animate-spin rounded-full border-2 border-current border-t-transparent" />
+            ) : (
+              <span>Check DRC</span>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              setVersionDialogOpen(true)
+              void loadVersions()
+            }}
+            className="flex shrink-0 items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-ink-dim transition hover:bg-surface-1 hover:text-ink"
+          >
+            <ListIcon size={14} />
+            Versions
+          </button>
+
+          <button
+            onClick={() => void onDelete()}
+            title="Delete project"
+            className="btn-ghost hover:bg-danger/5 hover:text-danger"
+          >
+            <TrashIcon size={14} />
+          </button>
+        </div>
+      </header>
+
+      <nav className="mt-5 flex gap-0.5 overflow-x-auto border-b border-line/50 pb-3">
+        {TABS.map((t) => {
+          const Icon = t.icon
+          const active = activeTab === t.id
+          return (
             <button
-              onClick={() => void onDelete()}
-              title="Delete project"
-              className="btn-ghost hover:bg-danger/5 hover:text-danger"
+              key={t.id}
+              onClick={() => onTabChange(t.id)}
+              className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2 text-[12px] font-medium transition ${
+                active ? 'text-accent tab-active' : 'text-ink-dim hover:text-ink'
+              }`}
             >
-              <TrashIcon size={14} />
+              <Icon size={13} />
+              {t.label}
             </button>
+          )
+        })}
+      </nav>
+
+      {drcViolations && drcViolations.summary.total > 0 && (
+        <div className="px-6 py-4">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="flex size-8 items-center justify-center rounded-lg bg-danger/10 text-danger">
+              <TrashIcon size={16} />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-ink">Design Rule Check</div>
+              <div className="flex gap-3 text-[11px] font-mono">
+                <span className={`text-danger font-bold`}>{drcViolations.summary.errors} errors</span>
+                <span className={`text-warning font-bold`}>{drcViolations.summary.warnings} warnings</span>
+                <span className="text-ink-dim">{drcViolations.summary.total} total</span>
+              </div>
+            </div>
+          </div>
+          <div className="overflow-y-auto max-h-48 border border-line rounded-lg p-3 bg-surface-1/50">
+            <table className="w-full text-left text-[12px]">
+              <thead>
+                <tr>
+                  <th className="pb-1 text-ink-faint font-medium">Severity</th>
+                  <th className="pb-1 text-ink-faint font-medium">Issue</th>
+                  <th className="pb-1 text-ink-faint font-medium">Component</th>
+                </tr>
+              </thead>
+              <tbody>
+                {drcViolations.violations.map((v) => (
+                  <tr key={v.id} className="border-t border-line/30">
+                    <td className="py-1.5">
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                          v.severity === 'error'
+                            ? 'text-danger bg-danger/10'
+                            : v.severity === 'warning'
+                              ? 'text-warning bg-warning/10'
+                              : 'text-ink-dim bg-surface-2'
+                        }`}
+                      >
+                        {v.severity}
+                      </span>
+                    </td>
+                    <td className="py-1.5 text-ink truncate">{v.message}</td>
+                    <td className="py-1.5 text-ink-faint truncate">
+                      {v.componentName ?? v.pinName ?? v.designator ?? '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
-
-        <nav className="mt-5 flex gap-0.5 overflow-x-auto border-b border-line/50 pb-3">
-          {TABS.map((t) => {
-            const Icon = t.icon
-            const active = activeTab === t.id
-            return (
-              <button
-                key={t.id}
-                onClick={() => onTabChange(t.id)}
-                className={`relative flex items-center gap-1.5 whitespace-nowrap px-3 py-2 text-[12px] font-medium transition ${
-                  active ? 'text-accent tab-active' : 'text-ink-dim hover:text-ink'
-                }`}
-              >
-                <Icon size={13} />
-                {t.label}
-              </button>
-            )
-          })}
-        </nav>
-
-        {drcViolations && drcViolations.summary.total > 0 && (
-          <div className="px-6 py-4">
-            <div className="flex items-center gap-2 mb-3">
-              <div className="flex size-8 items-center justify-center rounded-lg bg-danger/10 text-danger">
-                <TrashIcon size={16} />
-              </div>
-              <div>
-                <div className="text-sm font-medium text-ink">Design Rule Check</div>
-                <div className="flex gap-3 text-[11px] font-mono">
-                  <span className={`text-danger font-bold`}>{drcViolations.summary.errors} errors</span>
-                  <span className={`text-warning font-bold`}>{drcViolations.summary.warnings} warnings</span>
-                  <span className="text-ink-dim">{drcViolations.summary.total} total</span>
-                </div>
-              </div>
-            </div>
-            <div className="overflow-y-auto max-h-48 border border-line rounded-lg p-3 bg-surface-1/50">
-              <table className="w-full text-left text-[12px]">
-                <thead>
-                  <tr>
-                    <th className="pb-1 text-ink-faint font-medium">Severity</th>
-                    <th className="pb-1 text-ink-faint font-medium">Issue</th>
-                    <th className="pb-1 text-ink-faint font-medium">Component</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {drcViolations.violations.map((v) => (
-                    <tr key={v.id} className="border-t border-line/30">
-                      <td className="py-1.5">
-                        <span
-                          className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                            v.severity === 'error'
-                              ? 'text-danger bg-danger/10'
-                              : v.severity === 'warning'
-                                ? 'text-warning bg-warning/10'
-                                : 'text-ink-dim bg-surface-2'
-                          }`}
-                        >
-                          {v.severity}
-                        </span>
-                      </td>
-                      <td className="py-1.5 text-ink truncate">{v.message}</td>
-                      <td className="py-1.5 text-ink-faint truncate">
-                        {v.componentName ?? v.pinName ?? v.designator ?? '—'}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-      </header>
+      )}
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-surface-0">
         {activeTab === 'overview' && <OverviewTab spec={spec} project={project} />}
@@ -477,6 +556,15 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
         {activeTab === 'chat' && <ChatTab project={project} onSave={upsertProject} onBack={() => onTabChange('overview')} />}
         {activeTab === 'product' && <InfoTab project={project} onSave={upsertProject} />}
         {activeTab === 'part' && <PartTab onAdd={onAddComponent} />}
+        {activeTab === 'sheets' && (
+          <SheetTab
+            spec={spec}
+            activeSheetId={activeSheetId}
+            onSheetChange={onSheetChange}
+            onAddConnection={onAddConnection}
+            onAddPort={onAddPort}
+          />
+        )}
       </div>
 
       {inspectorComponent && (

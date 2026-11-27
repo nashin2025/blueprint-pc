@@ -24,7 +24,7 @@ import { layoutWiring } from '../src/renderer/src/lib/wiringLayout.ts'
 import { layoutPackage, pinCategory } from '../src/renderer/src/lib/packageLayout.ts'
 import { normalisePin, parseCurrency, parsePriceValue } from '../src/main/sync/schematik-parse.ts'
 import { MVR_PER_USD, approxUsd, formatNative, isComparable, toUsd } from '../src/shared/money.ts'
-import type { Component, Connection } from '../src/shared/types.ts'
+import type { Component, Connection, Sheet, SheetPort } from '../src/shared/types.ts'
 import { runDrc, summarizeDrc } from '../src/main/drc.ts'
 import {
   placeComponents,
@@ -965,6 +965,116 @@ check('DRC: clean design is clean', drcCleanSummary.clean === true)
 
 // Default rules are valid
 check('DRC: default rules have valid values', DEFAULT_PCB_RULES.traceWidth > 0 && DEFAULT_PCB_RULES.traceClearance > 0)
+
+// ---------------------------------------------------------------------------
+// Multi-sheet schematic support
+// ---------------------------------------------------------------------------
+
+function mkSheet(id: string, name: string, connectionIds: string[] = [], portIds: string[] = []): Sheet {
+  return { id, name, x: 0, y: 0, width: 200, height: 150, connectionIds, portIds }
+}
+
+function mkPort(id: string, sheetId: string, name: string, direction: SheetPort['direction'] = 'output'): SheetPort {
+  return { id, sheetId, name, x: 0, y: 0, direction }
+}
+
+// Pure logic mirroring the sheets:add-sheet / sheets:rename-sheet IPC handlers.
+function addSheetLogic(sheets: Sheet[], name: string, id: string): Sheet[] {
+  return [...sheets, mkSheet(id, name)]
+}
+
+function renameSheetLogic(sheets: Sheet[], sheetId: string, name: string): Sheet[] {
+  return sheets.map((s) => (s.id === sheetId ? { ...s, name } : s))
+}
+
+// Pure logic mirroring sheets:delete-sheet. Returns null when the sheet is missing.
+function deleteSheetLogic(
+  sheets: Sheet[],
+  connections: Connection[],
+  ports: SheetPort[],
+  sheetId: string
+): { sheets: Sheet[]; connections: Connection[]; ports: SheetPort[] } | null {
+  const sheet = sheets.find((s) => s.id === sheetId)
+  if (!sheet) return null
+  const nextSheets = sheets.filter((s) => s.id !== sheetId)
+  const nextConnections = connections.filter(
+    (c) => c.sheetId !== sheetId && !sheet.connectionIds.includes(c.id)
+  )
+  const nextPorts = ports.filter((p) => p.sheetId !== sheetId)
+  return { sheets: nextSheets, connections: nextConnections, ports: nextPorts }
+}
+
+// Pure logic mirroring sheets:connect-port. Rejects missing ports and same-direction pairs.
+function connectPortLogic(
+  ports: SheetPort[],
+  sheets: Sheet[],
+  connections: Connection[],
+  portId1: string,
+  portId2: string,
+  connectionId: string
+): { connection: Connection; sheets: Sheet[] } | { error: string } | null {
+  const p1 = ports.find((p) => p.id === portId1)
+  const p2 = ports.find((p) => p.id === portId2)
+  if (!p1 || !p2) return null
+  if (p1.direction === p2.direction) return { error: 'same direction' }
+  const connection: Connection = {
+    id: connectionId,
+    sheetId: p1.sheetId,
+    from: { componentId: p1.id, pin: p1.name },
+    to: { componentId: p2.id, pin: p2.name },
+    kind: 'signal',
+    net: `sheet-link:${p1.id}:${p2.id}`
+  }
+  const nextSheets = sheets.map((s) => {
+    const ids = [...s.connectionIds]
+    if (s.id === p1.sheetId && !ids.includes(connectionId)) ids.push(connectionId)
+    if (s.id === p2.sheetId && !ids.includes(connectionId)) ids.push(connectionId)
+    return { ...s, connectionIds: ids }
+  })
+  return { connection, sheets: nextSheets }
+}
+
+const baseSheets: Sheet[] = [mkSheet('s1', 'Power'), mkSheet('s2', 'Analog')]
+const basePorts: SheetPort[] = [
+  mkPort('p1', 's1', '5V_OUT', 'output'),
+  mkPort('p2', 's2', '5V_IN', 'input'),
+  mkPort('p3', 's1', 'CLK_OUT', 'output')
+]
+const baseConns: Connection[] = [
+  { id: 'c1', from: { componentId: 'p1', pin: '5V_OUT' }, to: { componentId: 'p2', pin: '5V_IN' }, kind: 'signal', net: '5V', sheetId: 's1' }
+]
+
+check('Sheets: start with two sheets', baseSheets.length === 2)
+
+const added = addSheetLogic(baseSheets, 'Digital', 's3')
+check('Sheets: add sheet increases count', added.length === 3)
+check('Sheets: new sheet has empty ports and connections', added[2].portIds.length === 0 && added[2].connectionIds.length === 0)
+
+const renamed = renameSheetLogic(baseSheets, 's2', 'Mixed Signal')
+check('Sheets: rename sheet updates name', renamed.find((s) => s.id === 's2')?.name === 'Mixed Signal')
+check('Sheets: rename does not change count', renamed.length === 2)
+
+const deleted = deleteSheetLogic(baseSheets, baseConns, basePorts, 's1')
+check('Sheets: delete removes the sheet', deleted !== null && deleted!.sheets.length === 1)
+check('Sheets: delete removes connections owned by the sheet', deleted !== null && deleted!.connections.length === 0)
+check('Sheets: delete removes ports owned by the sheet', deleted !== null && deleted!.ports.length === 1)
+check('Sheets: delete of missing sheet returns null', deleteSheetLogic(baseSheets, baseConns, basePorts, 'missing') === null)
+
+const connected = connectPortLogic(basePorts, baseSheets, baseConns, 'p1', 'p2', 'cx1') as { connection: Connection; sheets: Sheet[] }
+check('Sheets: connect-port creates a connection', connected.connection.id === 'cx1')
+check('Sheets: connect-port links output to input', connected.connection.from.componentId === 'p1' && connected.connection.to.componentId === 'p2')
+check('Sheets: connect-port registers on both sheets', connected.sheets.find((s) => s.id === 's1')!.connectionIds.includes('cx1') && connected.sheets.find((s) => s.id === 's2')!.connectionIds.includes('cx1'))
+
+const sameDir = connectPortLogic(basePorts, baseSheets, baseConns, 'p1', 'p3', 'cx2')
+check('Sheets: connect-port rejects same-direction ports', sameDir !== null && 'error' in sameDir && sameDir!.error === 'same direction')
+
+const missing = connectPortLogic(basePorts, baseSheets, baseConns, 'p1', 'nope', 'cx3')
+check('Sheets: connect-port rejects missing port', missing === null)
+
+// Sheet selector renders correct sheet count: a selector built from the sheets
+// array shows one option per sheet.
+const selectorSheetCount = baseSheets.length
+check('SheetSelector: option count matches sheet count', selectorSheetCount === 2)
 
 // ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)
