@@ -22,6 +22,9 @@ import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
 import { getDrcRules, saveDrcRules } from './drc-rules'
+import { placeComponents, attachPads, routeTraces } from './pcb-layout'
+import type { PcbPad, PcbVia } from './pcb-layout'
+import { generateGerberFiles } from './gerber'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -259,6 +262,65 @@ export function registerIpc(): void {
     try {
       saveDrcRules(args.projectId, args.rules)
       return { ok: true as const }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:export-gerber', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      const { spec } = project
+
+      const boardW = 100 // 100mm board
+      const boardH = 80  // 80mm board
+
+      // Place components
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      // Attach pads to placements
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+
+      // Build pad lookup: "componentId:pinName" -> PcbPad
+      const padLookup = new Map<string, PcbPad>()
+      for (const p of placed) {
+        for (const pad of p.pads) {
+          padLookup.set(`${p.componentId}:${pad.pinName}`, pad)
+        }
+      }
+
+      // Route traces
+      const routeConnections = spec.connections.map((conn) => ({
+        net: conn.net ?? 'NET_1',
+        fromPin: padLookup.get(`${conn.from.componentId}:${conn.from.pin}`)!,
+        toPin: padLookup.get(`${conn.to.componentId}:${conn.to.pin}`)!,
+      }))
+      const { traces, unrouted } = routeTraces(
+        routeConnections,
+        placed,
+        boardW,
+        boardH,
+        1,
+        0.25
+      )
+
+      // Collect all pads
+      const allPads = placed.flatMap((p) => p.pads)
+      const vias: PcbVia[] = [] // Simple router has no vias
+
+      // Generate Gerber files
+      const files = generateGerberFiles(placed, traces, allPads, vias)
+
+      return {
+        ok: true as const,
+        data: { files, unrouted, boardW, boardH },
+      }
     } catch (err) {
       return fail(err)
     }

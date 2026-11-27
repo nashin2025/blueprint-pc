@@ -104,6 +104,30 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
     }
   }
 
+  async function exportGerber() {
+    const res = await window.api.pcbExportGerber(project.id)
+    if (res.ok && res.data) {
+      const { files } = res.data as { files: Record<string, string> }
+      // Download each file as a separate blob
+      for (const [fileName, content] of Object.entries(files)) {
+        const blob = new Blob([content], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${spec.title.replace(/[^a-z0-9]/gi, '_')}_${fileName}`
+        document.body.appendChild(a)
+        a.click()
+        document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+      }
+      if (res.data.unrouted.length > 0) {
+        window.alert(
+          `Warning: ${res.data.unrouted.length} connection(s) could not be routed and are missing from Gerber output.`
+        )
+      }
+    }
+  }
+
   async function exportSpec() {
     const res = await window.api.projectsExportSpec(project.id)
     if (res.ok && res.data) {
@@ -290,6 +314,16 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
                     >
                       <DownloadIcon size={14} />
                       Netlist (.net)
+                    </button>
+                    <button
+                      onClick={() => {
+                        exportGerber()
+                        setMenuOpen(false)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-[13px] text-ink transition hover:bg-surface-2"
+                    >
+                      <DownloadIcon size={14} />
+                      Gerber files
                     </button>
                     <button
                       onClick={() => {

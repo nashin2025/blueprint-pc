@@ -48,6 +48,9 @@ const api = {
   projectsReadFile: (filePath: string): Promise<IpcResult<{ content: string }>> =>
     ipcRenderer.invoke('projects:read-file', filePath),
 
+  pcbExportGerber: (projectId: string): Promise<IpcResult<{ files: Record<string, string>; unrouted: any[]; boardW: number; boardH: number }>> =>
+    ipcRenderer.invoke('pcb:export-gerber', projectId),
+
   loadSettings: (): Promise<AppSettings> => ipcRenderer.invoke('settings:load'),
   saveSettings: (settings: AppSettings): Promise<AppSettings> =>
     ipcRenderer.invoke('settings:save', settings),
