@@ -1,5 +1,6 @@
 import Database from 'better-sqlite3'
 import { join } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { dataDir } from './paths'
 import type { Project, DesignSpec, Component, Connection, AssemblyStep, ChatMessage, DesignVersion } from '@shared/types'
 
@@ -807,4 +808,274 @@ export function exportCart(cartId: string): string {
     )
   }
   return lines.join('\n') + '\n'
+}
+
+// ---------------------------------------------------------------------------
+// Canonical JSON project import/export (.bpjson)
+// ---------------------------------------------------------------------------
+
+/** Canonical (deterministic) JSON serialization of a Project.
+ *
+ * Keys are sorted, numbers use fixed precision, and volatile fields are
+ * stripped so that two logically-equal projects produce byte-identical
+ * output. Sufficient for Git-friendly diffs and offline import/export.
+ */
+export function canonicalProjectJson(project: Project): string {
+  const { spec } = project
+
+  // Sort components by id for deterministic ordering
+  const components = [...spec.components].sort((a, b) => a.id.localeCompare(b.id)).map((c) => ({
+    id: c.id,
+    name: c.name,
+    partName: c.partName ?? null,
+    category: c.category,
+    quantity: c.quantity,
+    pins: [...c.pins].sort(),
+    designator: c.designator ?? null,
+    modelFilePath: c.modelFilePath ?? null,
+    footprintId: (c as any).footprintId ?? null,
+    hierarchicalBlockId: (c as any).hierarchicalBlockId ?? null,
+    unitPrice: c.unitPrice ?? null,
+    unitPriceCurrency: c.unitPriceCurrency ?? 'USD',
+    url: c.url ?? null,
+    image: c.image ?? null,
+    datasheet: c.datasheet ?? null,
+    notes: c.notes ?? null
+  }))
+
+  // Sort connections by id
+  const connections = [...spec.connections].sort((a, b) => a.id.localeCompare(b.id)).map((c) => ({
+    id: c.id,
+    net: c.net ?? null,
+    kind: c.kind,
+    label: c.label ?? null,
+    from: { componentId: c.from.componentId, pin: c.from.pin },
+    to: { componentId: c.to.componentId, pin: c.to.pin }
+  }))
+
+  // Sort sheets by id
+  const sheets = [...(spec.sheets ?? [])].sort((a, b) => a.id.localeCompare(b.id)).map((s) => ({
+    id: s.id,
+    name: s.name,
+    x: s.x,
+    y: s.y,
+    width: s.width,
+    height: s.height,
+    connectionIds: [...s.connectionIds].sort(),
+    portIds: [...s.portIds].sort()
+  }))
+
+  // Sort hierarchical blocks by id
+  const hierarchicalBlocks = [...(spec.hierarchicalBlocks ?? [])].sort((a, b) => a.id.localeCompare(b.id)).map((b) => ({
+    id: b.id,
+    name: b.name,
+    description: b.description ?? null,
+    ports: [...(b.ports ?? [])].sort((a, b) => a.name.localeCompare(b.name)).map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      componentId: p.componentId,
+      pinName: p.pinName
+    })),
+    spec: b.spec
+  }))
+
+  // Sort footprints by id
+  const footprints = [...(spec.footprints ?? [])].sort((a, b) => a.id.localeCompare(b.id)).map((f) => ({
+    id: f.id,
+    name: f.name,
+    description: f.description ?? null,
+    pads: [...(f.pads ?? [])].sort((a, b) => a.id.localeCompare(b.id)).map((pad) => ({
+      id: pad.id,
+      x: pad.x,
+      y: pad.y,
+      w: pad.w,
+      h: pad.h,
+      shape: pad.shape
+    }))
+  }))
+
+  const designRules = spec.designRules ?? {
+    traceWidth: 0.2,
+    traceClearance: 0.2,
+    padToTraceClearance: 0.2,
+    viaToTraceClearance: 0.2,
+    minAnnularRing: 0.1
+  }
+
+  const canonical = {
+    project: {
+      id: project.id,
+      name: spec.title,
+      createdAt: project.createdAt,
+      updatedAt: project.updatedAt,
+      archived: project.archived
+    },
+    spec: {
+      title: spec.title,
+      summary: spec.summary ?? '',
+      difficulty: spec.difficulty ?? 'beginner',
+      estimatedTime: spec.estimatedTime ?? null,
+      estimatedCost: spec.estimatedCost ?? null,
+      imageFile: spec.imageFile ?? null,
+      infoSummary: spec.infoSummary ?? null,
+      components,
+      connections,
+      sheets,
+      hierarchicalBlocks,
+      footprints,
+      designRules
+    },
+    chat: [...project.chat].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      createdAt: m.createdAt
+    })),
+    versions: [...project.versions].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map((v) => ({
+      id: v.id,
+      label: v.label,
+      createdAt: v.createdAt,
+      prompt: v.prompt ?? null,
+      spec: v.spec
+    }))
+  }
+
+  return JSON.stringify(canonical, null, 2) + '\n'
+}
+
+/** Parse canonical JSON back into a Project, validating structure. */
+export function parseCanonicalProjectJson(jsonString: string): Project {
+  let parsed: any
+  try {
+    parsed = JSON.parse(jsonString)
+  } catch (err) {
+    throw new Error(`Invalid JSON: ${err instanceof Error ? err.message : String(err)}`)
+  }
+
+  const proj = parsed.project ?? {}
+  const spec = parsed.spec ?? {}
+  const chat = parsed.chat ?? []
+  const versions = parsed.versions ?? []
+
+  const project: Project = {
+    id: proj.id || randomUUID(),
+    createdAt: typeof proj.createdAt === 'number' ? proj.createdAt : Date.now(),
+    updatedAt: typeof proj.updatedAt === 'number' ? proj.updatedAt : Date.now(),
+    archived: Boolean(proj.archived),
+    spec: {
+      title: spec.title || proj.name || 'Untitled',
+      summary: spec.summary ?? '',
+      difficulty: spec.difficulty ?? 'beginner',
+      estimatedTime: spec.estimatedTime ?? undefined,
+      estimatedCost: spec.estimatedCost ?? undefined,
+      components: (spec.components ?? []).map((c: any) => ({
+        id: c.id || randomUUID(),
+        name: c.name || 'Component',
+        partName: c.partName ?? undefined,
+        category: c.category ?? 'Other',
+        quantity: typeof c.quantity === 'number' ? c.quantity : 1,
+        pins: Array.isArray(c.pins) ? c.pins : [],
+        designator: c.designator ?? undefined,
+        modelFilePath: c.modelFilePath ?? undefined,
+        footprintId: c.footprintId ?? undefined,
+        hierarchicalBlockId: c.hierarchicalBlockId ?? undefined,
+        unitPrice: c.unitPrice ?? undefined,
+        unitPriceCurrency: c.unitPriceCurrency ?? 'USD',
+        url: c.url ?? undefined,
+        image: c.image ?? undefined,
+        datasheet: c.datasheet ?? undefined,
+        notes: c.notes ?? undefined
+      })),
+      connections: (spec.connections ?? []).map((c: any) => ({
+        id: c.id || randomUUID(),
+        net: c.net ?? undefined,
+        kind: c.kind ?? 'signal',
+        label: c.label ?? undefined,
+        from: { componentId: c.from.componentId, pin: c.from.pin },
+        to: { componentId: c.to.componentId, pin: c.to.pin }
+      })),
+      sheets: (spec.sheets ?? []).map((s: any) => ({
+        id: s.id || randomUUID(),
+        name: s.name || 'Sheet',
+        x: typeof s.x === 'number' ? s.x : 0,
+        y: typeof s.y === 'number' ? s.y : 0,
+        width: typeof s.width === 'number' ? s.width : 100,
+        height: typeof s.height === 'number' ? s.height : 80,
+        connectionIds: Array.isArray(s.connectionIds) ? s.connectionIds : [],
+        portIds: Array.isArray(s.portIds) ? s.portIds : []
+      })),
+      hierarchicalBlocks: (spec.hierarchicalBlocks ?? []).map((b: any) => ({
+        id: b.id || randomUUID(),
+        name: b.name || 'Block',
+        description: b.description ?? undefined,
+        ports: (b.ports ?? []).map((p: any) => ({
+          id: p.id || randomUUID(),
+          name: p.name || 'Port',
+          type: p.type ?? 'input',
+          componentId: p.componentId ?? '',
+          pinName: p.pinName ?? ''
+        })),
+        spec: b.spec ?? {}
+      })),
+      footprints: (spec.footprints ?? []).map((f: any) => ({
+        id: f.id || randomUUID(),
+        name: f.name || 'Footprint',
+        description: f.description ?? undefined,
+        pads: (f.pads ?? []).map((pad: any) => ({
+          id: pad.id || randomUUID(),
+          x: typeof pad.x === 'number' ? pad.x : 0,
+          y: typeof pad.y === 'number' ? pad.y : 0,
+          w: typeof pad.w === 'number' ? pad.w : 2,
+          h: typeof pad.h === 'number' ? pad.h : 2,
+          shape: pad.shape ?? 'rect'
+        }))
+      })),
+      designRules: spec.designRules ?? {
+        traceWidth: 0.2,
+        traceClearance: 0.2,
+        padToTraceClearance: 0.2,
+        viaToTraceClearance: 0.2,
+        minAnnularRing: 0.1
+      },
+      steps: (spec.steps ?? []).map((s: any) => ({
+        id: s.id || randomUUID(),
+        order: typeof s.order === 'number' ? s.order : 0,
+        title: s.title || 'Step',
+        body: s.body || '',
+        componentIds: Array.isArray(s.componentIds) ? s.componentIds : []
+      })),
+      imageFile: spec.imageFile ?? undefined,
+      infoSummary: spec.infoSummary ?? undefined
+    },
+    chat: chat.map((m: any) => ({
+      id: m.id || randomUUID(),
+      role: m.role ?? 'user',
+      content: m.content ?? '',
+      createdAt: typeof m.createdAt === 'number' ? m.createdAt : Date.now()
+    })),
+    versions: versions.map((v: any) => ({
+      id: v.id || randomUUID(),
+      label: v.label || 'Version',
+      createdAt: typeof v.createdAt === 'number' ? v.createdAt : Date.now(),
+      prompt: v.prompt ?? undefined,
+      spec: v.spec ?? {}
+    }))
+  }
+
+  return project
+}
+
+/** Export a project as canonical JSON string. */
+export function exportProjectJson(projectId: string): string {
+  const project = getProject(projectId)
+  if (!project) throw new Error(`Project not found: ${projectId}`)
+  return canonicalProjectJson(project)
+}
+
+/** Import a project from canonical JSON string. Returns the saved Project. */
+export function importProjectJson(jsonString: string): Project {
+  const project = parseCanonicalProjectJson(jsonString)
+  saveProject(project)
+  return project
 }

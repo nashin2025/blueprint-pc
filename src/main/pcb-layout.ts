@@ -421,12 +421,17 @@ export function routeTraces(
   boardW: number,
   boardH: number,
   gridSize = 1,
-  traceWidth = 0.25
-): { traces: PcbTrace[]; unrouted: Array<{ net: string; reason: string }> } {
+  traceWidth = 0.25,
+  rules: PcbDesignRules = DEFAULT_RULES
+): { traces: PcbTrace[]; unrouted: Array<{ net: string; reason: string }>; drcViolations: PcbDrcViolation[] } {
   const traces: PcbTrace[] = [];
   const unrouted: Array<{ net: string; reason: string }> = [];
+  const drcViolations: PcbDrcViolation[] = [];
   const routedBlocked = new Set<string>(); // cells occupied by previous traces
   const footprintBlocked = buildObstacles(placements, traceWidth + 0.2, boardW, boardH, gridSize);
+
+  // Collect all pads from placements for DRC checking
+  const allPads = placements.flatMap((p) => p.pads);
 
   for (const conn of connections) {
     const start = conn.fromPin.center;
@@ -460,6 +465,11 @@ export function routeTraces(
     };
     traces.push(trace);
 
+    // Real-time DRC: check the newly routed trace against all previously routed
+    // traces and all pads, recording violations immediately.
+    const traceViolations = checkTraceClearance(trace, traces.slice(0, -1), allPads, rules);
+    drcViolations.push(...traceViolations);
+
     // Add trace cells to blocked set for subsequent nets (inflate by clearance).
     const inflateCells = Math.ceil((traceWidth + 0.2) / gridSize);
     for (let i = 0; i < path.length - 1; i++) {
@@ -482,7 +492,7 @@ export function routeTraces(
     }
   }
 
-  return { traces, unrouted };
+  return { traces, unrouted, drcViolations };
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +506,83 @@ const DEFAULT_RULES: PcbDesignRules = {
   viaToTraceClearance: 0.2,
   minAnnularRing: 0.1,
 };
+
+/** Check a single candidate trace against existing traces and pads for clearance
+ *  violations. Used for real-time DRC during routing: the renderer can call this
+ *  after each trace segment is placed to flag violations immediately rather than
+ *  only at export time.
+ *
+ *  Returns violations where the candidate trace violates trace-to-trace or
+ *  trace-to-pad clearance rules. Does not modify any state.
+ */
+export function checkTraceClearance(
+  candidate: PcbTrace,
+  existingTraces: PcbTrace[],
+  pads: PcbPad[],
+  rules: PcbDesignRules = DEFAULT_RULES
+): PcbDrcViolation[] {
+  const violations: PcbDrcViolation[] = []
+
+  // Build segment list for the candidate trace.
+  const candidateSegments: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
+  for (let i = 0; i < candidate.points.length - 1; i++) {
+    candidateSegments.push({
+      x1: candidate.points[i].x,
+      y1: candidate.points[i].y,
+      x2: candidate.points[i + 1].x,
+      y2: candidate.points[i + 1].y
+    })
+  }
+
+  // Rule: candidate trace vs existing traces (different nets only).
+  for (const seg of candidateSegments) {
+    for (const existing of existingTraces) {
+      if (existing.net === candidate.net) continue
+      for (let i = 0; i < existing.points.length - 1; i++) {
+        const d = segmentToSegmentDist(
+          seg.x1, seg.y1, seg.x2, seg.y2,
+          existing.points[i].x, existing.points[i].y,
+          existing.points[i + 1].x, existing.points[i + 1].y
+        )
+        if (d > 0 && d < rules.traceClearance) {
+          violations.push({
+            id: `drc:realtime:trace-to-trace:${candidate.net}:${existing.net}`,
+            severity: 'error',
+            category: 'trace-to-trace',
+            message: `Trace "${candidate.net}" is ${d.toFixed(2)}mm from trace "${existing.net}" (need ${rules.traceClearance}mm)`,
+            net: candidate.net,
+            location: { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }
+          })
+        }
+      }
+    }
+  }
+
+  // Rule: candidate trace vs pads.
+  for (const seg of candidateSegments) {
+    for (const pad of pads) {
+      const rect: Aabb = {
+        minX: pad.center.x - pad.w / 2,
+        minY: pad.center.y - pad.h / 2,
+        maxX: pad.center.x + pad.w / 2,
+        maxY: pad.center.y + pad.h / 2
+      }
+      const d = segmentToRectDist(seg.x1, seg.y1, seg.x2, seg.y2, rect)
+      if (d > 0 && d < rules.padToTraceClearance) {
+        violations.push({
+          id: `drc:realtime:trace-to-pad:${candidate.net}:${pad.componentId}:${pad.pinName}`,
+          severity: 'error',
+          category: 'trace-to-pad',
+          message: `Trace "${candidate.net}" is ${d.toFixed(2)}mm from pad "${pad.pinName}" on "${pad.componentId}" (need ${rules.padToTraceClearance}mm)`,
+          net: candidate.net,
+          location: { x: (seg.x1 + seg.x2) / 2, y: (seg.y1 + seg.y2) / 2 }
+        })
+      }
+    }
+  }
+
+  return violations
+}
 
 /** Run DRC checks on a completed layout. */
 export function runPcbDrc(

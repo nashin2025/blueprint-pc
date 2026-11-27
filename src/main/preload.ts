@@ -56,11 +56,37 @@ const api = {
   projectsImportSpec: (args: { spec: string }): Promise<IpcResult<{ project: Project }>> =>
     ipcRenderer.invoke('projects:import-spec', args),
 
+  projectsExportJson: (projectId: string): Promise<IpcResult<{ json: string }>> =>
+    ipcRenderer.invoke('projects:export-json', projectId),
+
+  projectsImportJson: (args: { json: string }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('projects:import-json', args),
+
   projectsReadFile: (filePath: string): Promise<IpcResult<{ content: string }>> =>
     ipcRenderer.invoke('projects:read-file', filePath),
 
   pcbExportGerber: (projectId: string): Promise<IpcResult<{ files: Record<string, string>; unrouted: any[]; boardW: number; boardH: number }>> =>
     ipcRenderer.invoke('pcb:export-gerber', projectId),
+
+  pcbPickPlace: (args: { projectId: string }): Promise<IpcResult<{ csv: string }>> =>
+    ipcRenderer.invoke('pcb:pick-place', args),
+
+  pcbDrcRealtime: (args: {
+    trace: { net: string; from: { componentId: string; pinName: string }; to: { componentId: string; pinName: string }; points: Array<{ x: number; y: number }> }
+    existingTraces: Array<{ net: string; from: { componentId: string; pinName: string }; to: { componentId: string; pinName: string }; points: Array<{ x: number; y: number }> }>
+    pads: Array<{ componentId: string; pinName: string; center: { x: number; y: number }; w: number; h: number }>
+    rules?: { traceWidth: number; traceClearance: number; padToTraceClearance: number; viaToTraceClearance: number; minAnnularRing: number }
+  }): Promise<IpcResult<{ violations: Array<{ id: string; severity: string; category: string; message: string; net?: string; location?: { x: number; y: number } }> }>> =>
+    ipcRenderer.invoke('pcb:drc-realtime', args),
+
+  pcbExportStep: (projectId: string): Promise<IpcResult<{ step: string; boardW: number; boardH: number; boardThickness: number }>> =>
+    ipcRenderer.invoke('pcb:export-step', projectId),
+
+  mechCheckClearance: (args: { projectId: string; clearance: number }): Promise<IpcResult<{
+    componentClearance: Array<{ componentId1: string; componentId2: string; distance: number; clearance: number; violation: boolean }>
+    edgeClearance: Array<{ componentId: string; distance: number; clearance: number; violation: boolean }>
+    clearance: number
+  }>> => ipcRenderer.invoke('mech:clearance-check', args),
 
   pcbCheckClearance: (args: { projectId: string; clearance: number }): Promise<
     IpcResult<{

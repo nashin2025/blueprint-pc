@@ -23,10 +23,13 @@ import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
 import { flattenHierarchy, expandBlockInPlace, validateBlock } from './hierarchical-design'
 import { getDrcRules, saveDrcRules } from './drc-rules'
-import { placeComponents, attachPads, routeTraces } from './pcb-layout'
-import type { PcbPad, PcbVia } from './pcb-layout'
+import { placeComponents, attachPads, routeTraces, checkTraceClearance } from './pcb-layout'
+import type { PcbPad, PcbVia, PcbTrace } from './pcb-layout'
 import { generateGerberFiles } from './gerber'
 import { generateLandPattern } from './footprint-generator'
+import { generatePickPlace, centroidToCsv } from './pickplace'
+import { generateStepBoard } from './step-export'
+import { checkComponentClearance, checkBoardEdgeClearance } from './mech-clearance'
 import { collabServer } from './collaboration'
 import {
   analyseTrace,
@@ -189,6 +192,24 @@ export function registerIpc(): void {
         versions: []
       }
       store.save(project)
+      return { ok: true as const, data: { project } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('projects:export-json', async (_e, projectId: string) => {
+    try {
+      const json = store.exportProjectJson(projectId)
+      return { ok: true as const, data: { json } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('projects:import-json', async (_e, args: { json: string }) => {
+    try {
+      const project = store.importProjectJson(args.json)
       return { ok: true as const, data: { project } }
     } catch (err) {
       return fail(err)
@@ -698,6 +719,111 @@ export function registerIpc(): void {
       const dz = a.z - b.z
       const distance = Math.sqrt(dx * dx + dz * dz)
       return { ok: true as const, data: { componentId1: args.compId1, componentId2: args.compId2, distance } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:pick-place', async (_e, args: { projectId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const { spec } = project
+
+      const boardW = 100
+      const boardH = 80
+
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+      const allPads = placed.flatMap((p) => p.pads)
+
+      const parts = generatePickPlace(placed, allPads)
+      const csv = centroidToCsv(parts)
+
+      return { ok: true as const, data: { csv } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:drc-realtime', async (_e, args: {
+    trace: PcbTrace
+    existingTraces: PcbTrace[]
+    pads: PcbPad[]
+    rules?: PcbDesignRules
+  }) => {
+    try {
+      const violations = checkTraceClearance(args.trace, args.existingTraces, args.pads, args.rules)
+      return { ok: true as const, data: { violations } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('pcb:export-step', async (_e, projectId: string) => {
+    try {
+      const project = store.get(projectId)
+      if (!project) return { ok: false, error: `Project not found: ${projectId}` }
+      const { spec } = project
+
+      const boardW = 100
+      const boardH = 80
+      const boardThickness = 1.6
+
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+      const allPads = placed.flatMap((p) => p.pads)
+
+      const routeConnections = spec.connections.map((conn) => ({
+        net: conn.net ?? 'NET_1',
+        fromPin: allPads.find((p) => p.componentId === conn.from.componentId && p.pinName === conn.from.pin)!,
+        toPin: allPads.find((p) => p.componentId === conn.to.componentId && p.pinName === conn.to.pin)!,
+      }))
+      const { traces } = routeTraces(routeConnections, placed, boardW, boardH, 1, 0.25)
+
+      const step = generateStepBoard(traces, allPads, boardW, boardH, boardThickness)
+
+      return { ok: true as const, data: { step, boardW, boardH, boardThickness } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('mech:clearance-check', async (_e, args: { projectId: string; clearance: number }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const clearance = Math.max(0, Number(args.clearance) || 0)
+      const { spec } = project
+
+      const boardW = 100
+      const boardH = 80
+
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+
+      const pinNamesByComponent = Object.fromEntries(
+        spec.components.map((c) => [c.id, c.pins])
+      )
+      const placed = attachPads(placements, pinNamesByComponent)
+
+      const compClearance = checkComponentClearance(placed, clearance)
+      const edgeClearance = checkBoardEdgeClearance(placed, boardW, boardH, clearance)
+
+      return { ok: true as const, data: { componentClearance: compClearance, edgeClearance, clearance } }
     } catch (err) {
       return fail(err)
     }

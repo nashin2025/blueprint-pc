@@ -7,7 +7,11 @@
  *   - GTO: Top silkscreen (component outlines)
  *   - Drill (Excellon): Via and pad holes
  *
- * All coordinates are in mm, absolute mode.
+ * All coordinates are in mm, absolute mode. Gerber output carries X2
+ * attributes (%TF.FileAttribute, %TF.CreationDate, %TF.FileFunction,
+ * %LN layer names) so fabs that prefer X2 over plain RS-274X can ingest
+ * the files directly. RS-274X compatibility is retained: all legacy
+ * commands and the M02*% end-of-file marker are unchanged.
  *
  * This is a feasibility-level generator suitable for prototyping and
  * low-volume production. It does not handle copper pours, thermal reliefs,
@@ -21,6 +25,23 @@ const MM = 0.01 // Gerber coordinate precision: 0.01mm
 /** Format a number for Gerber output (2 decimal places, mm). */
 function fmt(n: number): string {
   return (Math.round(n / MM) * MM).toFixed(2).replace(/\.00$/, '')
+}
+
+/** Build a Gerber X2 header block for a layer.
+ *
+ * X2 attributes identify the file format, creation date, file function
+ * (layer type + layer + side), and layer name. These are comments in
+ * RS-274X so plain RS-274X parsers ignore them, while X2-aware parsers
+ * read the structured metadata.
+ */
+function x2Header(fileFunction: string, layerName: string): string[] {
+  const now = new Date().toISOString()
+  return [
+    '%TF.FileAttribute,X2*%', // Declares Gerber X2 format
+    `%TF.CreationDate,${now}*%`, // File creation timestamp
+    `%TF.FileFunction,${fileFunction}*%`, // Layer function: type, layer, side
+    `%LN1,${layerName}*%`, // Layer name (X2 layer attribute)
+  ]
 }
 
 /** Format a number for Excellon output (2 decimal places, mm). */
@@ -63,6 +84,7 @@ function padToGerber(pad: PcbPad): string[] {
 /** Generate Gerber X2 for top copper layer (GTL). */
 function generateGTL(traces: PcbTrace[], pads: PcbPad[]): string[] {
   const lines: string[] = []
+  lines.push(...x2Header('Copper,L1,Top', 'Top Copper'))
   lines.push('%GTL*%') // Top copper layer
   lines.push(...apertureDefinitions())
 
@@ -84,6 +106,7 @@ function generateGTL(traces: PcbTrace[], pads: PcbPad[]): string[] {
 /** Generate Gerber X2 for top solder mask (GTS). */
 function generateGTS(pads: PcbPad[]): string[] {
   const lines: string[] = []
+  lines.push(...x2Header('SolderMask,L1,Top', 'Top Solder Mask'))
   lines.push('%GTS*%') // Top solder mask
   lines.push('%FSLAX20Y20*%')
   lines.push('%MOMM*%')
@@ -105,6 +128,7 @@ function generateGTS(pads: PcbPad[]): string[] {
 /** Generate Gerber X2 for top silkscreen (GTO). */
 function generateGTO(placements: PcbPlacement[]): string[] {
   const lines: string[] = []
+  lines.push(...x2Header('Silkscreen,L1,Top', 'Top Silkscreen'))
   lines.push('%GTO*%') // Top silkscreen
   lines.push('%FSLAX20Y20*%')
   lines.push('%MOMM*%')

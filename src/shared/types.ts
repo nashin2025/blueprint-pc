@@ -203,6 +203,8 @@ export interface DesignSpec {
   /** Reusable sub-circuits defined within this design. Each block can be placed
    *  as a component instance in the parent design and drilled into for editing. */
   hierarchicalBlocks?: HierarchicalBlock[]
+  /** PCB design rules used for this design (trace width, clearance, etc.). */
+  designRules?: PcbDesignRules
 }
 
 export type ChatRole = 'user' | 'assistant'

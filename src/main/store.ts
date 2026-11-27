@@ -1,4 +1,7 @@
-import type { DesignVersion, Project } from '@shared/types'
+import type {
+  DesignVersion,
+  Project,
+} from '@shared/types'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -12,7 +15,9 @@ import {
   purgeProject as dbPurgeProject,
   dataFilePath as dbDataFilePath,
   migrateFromJson as dbMigrateFromJson,
-  saveProjectVersion as dbSaveProjectVersion
+  saveProjectVersion as dbSaveProjectVersion,
+  exportProjectJson as dbExportProjectJson,
+  importProjectJson as dbImportProjectJson
 } from './db'
 import { imagesDir } from './images'
 import { modelsDir } from './sync/model-downloader'
@@ -147,6 +152,18 @@ export const store = {
   saveVersion(projectId: string, version: DesignVersion): void {
     ensureMigrated()
     dbSaveProjectVersion(projectId, version)
+  },
+
+  /** Export a project as canonical JSON string (.bpjson). */
+  exportProjectJson(projectId: string): string {
+    ensureMigrated()
+    return dbExportProjectJson(projectId)
+  },
+
+  /** Import a project from canonical JSON string (.bpjson). */
+  importProjectJson(jsonString: string): Project {
+    ensureMigrated()
+    return dbImportProjectJson(jsonString)
   }
 }
 

@@ -1571,6 +1571,77 @@ check('findSubstitutes returns matching parts', subs.length === 1 && subs[0].slu
 const obsoleteWithSubs = findObsoleteWithSubstitutes(testParts)
 check('findObsoleteWithSubstitutes finds u1', obsoleteWithSubs.length === 1 && obsoleteWithSubs[0].slug === 'u1')
 
+// ---------------------------------------------------------------------------
+// Phase 1 quick-win self-checks
+// ---------------------------------------------------------------------------
+
+import {
+  generatePickPlace,
+  centroidToCsv
+} from '../src/main/pickplace.ts'
+import {
+  generateStepBoard
+} from '../src/main/step-export.ts'
+import {
+  checkComponentClearance,
+  checkBoardEdgeClearance
+} from '../src/main/mech-clearance.ts'
+import {
+  checkTraceClearance
+} from '../src/main/pcb-layout.ts'
+import type { PcbPlacement, PcbTrace, PcbPad, PcbDesignRules } from '../src/main/pcb-layout.ts'
+
+// Pick-place centroid CSV
+const testPlacements: PcbPlacement[] = [
+  { componentId: 'c1', name: 'C1', center: { x: 10, y: 20 }, w: 5, h: 3, rotationDeg: 0, pads: [] },
+  { componentId: 'r1', name: 'R1', center: { x: 30, y: 40 }, w: 6, h: 3, rotationDeg: 90, pads: [] }
+]
+const centroidParts = generatePickPlace(testPlacements, [])
+const csv = centroidToCsv(centroidParts)
+check('pick-place returns one row per placement', centroidParts.length === 2)
+check('centroid CSV has header', csv.startsWith('Designator,X(mm),Y(mm),Rotation(deg),Side,Footprint'))
+check('centroid CSV has data rows', csv.includes('C1') && csv.includes('R1'))
+
+// STEP export doesn't throw on simple input
+const testTraces: PcbTrace[] = [
+  { net: 'NET_1', from: { componentId: 'c1', pinName: '1' }, to: { componentId: 'r1', pinName: '1' }, points: [{ x: 10, y: 20 }, { x: 30, y: 40 }] }
+]
+const testPads: PcbPad[] = [
+  { componentId: 'c1', pinName: '1', center: { x: 10, y: 20 }, w: 2, h: 2 },
+  { componentId: 'r1', pinName: '1', center: { x: 30, y: 40 }, w: 2, h: 2 }
+]
+const step = generateStepBoard(testTraces, testPads, 100, 80, 1.6)
+check('STEP export produces output', step.length > 0)
+check('STEP export has header', step.startsWith('ISO-10303-21;'))
+check('STEP export has footer', step.endsWith('END-ISO-10303-21;\n'))
+
+// Mechanical clearance
+const compClearance = checkComponentClearance(testPlacements, 2.0)
+check('component clearance returns pairs', compClearance.length === 1)
+check('component clearance has violation flag', typeof compClearance[0].violation === 'boolean')
+
+const edgeClearance = checkBoardEdgeClearance(testPlacements, 100, 80, 5.0)
+check('edge clearance returns per-component results', edgeClearance.length === 2)
+check('edge clearance has violation flag', typeof edgeClearance[0].violation === 'boolean')
+
+// Real-time DRC
+const rules: PcbDesignRules = { traceWidth: 0.2, traceClearance: 0.2, padToTraceClearance: 0.2, viaToTraceClearance: 0.2, minAnnularRing: 0.1 }
+const closeTrace: PcbTrace = {
+  net: 'NET_A',
+  from: { componentId: 'c1', pinName: '1' },
+  to: { componentId: 'r1', pinName: '1' },
+  points: [{ x: 10, y: 20 }, { x: 15, y: 20 }]
+}
+const existingTrace: PcbTrace = {
+  net: 'NET_B',
+  from: { componentId: 'c1', pinName: '2' },
+  to: { componentId: 'r1', pinName: '2' },
+  points: [{ x: 10, y: 20.15 }, { x: 15, y: 20.15 }]
+}
+const drcViolations2 = checkTraceClearance(closeTrace, [existingTrace], testPads, rules)
+check('real-time DRC detects close traces', drcViolations2.length > 0)
+check('real-time DRC violation has category', drcViolations2[0].category === 'trace-to-trace')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()
