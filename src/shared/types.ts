@@ -236,6 +236,59 @@ export interface BomLineItem {
   url: string | null
 }
 
+/** One link between a schematic component and its PCB placement. */
+export interface AnnotationLink {
+  /** Schematic component ID. */
+  componentId: string
+  /** Reference designator (e.g. "C1", "R1"). */
+  designator: string
+  /** PCB placement ID (if placed). Null if not yet placed on PCB. */
+  placementId: string | null
+  /** PCB footprint (if assigned). Null if not yet assigned. */
+  footprintId: string | null
+  /** Net this component's pins connect to (from schematic). */
+  schematicNet: string | null
+  /** Net this component's pins connect to (from PCB). Null if not routed. */
+  pcbNet: string | null
+}
+
+/** One divergence between schematic and PCB. */
+export interface AnnotationDivergence {
+  type:
+    | 'component_added'
+    | 'component_removed'
+    | 'footprint_changed'
+    | 'net_changed'
+    | 'unplaced'
+    | 'unrouted'
+  componentId: string
+  designator: string
+  message: string
+  severity: 'error' | 'warning'
+}
+
+/** One ECO (Engineering Change Order) action. */
+export interface EcoAction {
+  type:
+    | 'add_component'
+    | 'remove_component'
+    | 'change_footprint'
+    | 'change_net'
+    | 'place_component'
+  designator: string
+  newValue: string | null
+  oldValue: string | null
+}
+
+/** Complete ECO: a set of actions to bring PCB into sync with schematic. */
+export interface Eco {
+  id: string
+  createdAt: number
+  actions: EcoAction[]
+  divergences: AnnotationDivergence[]
+  autoResolvable: boolean
+}
+
 export interface DesignSpec {
   title: string
   summary: string

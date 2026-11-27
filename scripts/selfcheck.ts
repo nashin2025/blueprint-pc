@@ -1851,6 +1851,35 @@ check('compareBoms finds source difference', diffs.some((d) => d.designator === 
 check('compareBoms shows old and new values', diffs.find((d) => d.designator === 'C1' && d.field === 'source')!.valueA === 'primary')
 check('compareBoms shows new value', diffs.find((d) => d.designator === 'C1' && d.field === 'source')!.valueB === 'override')
 
+// ECO: applyEco applies footprint changes
+import { applyEco } from '../src/main/annotation.ts'
+import type { Eco } from '../src/shared/types.ts'
+const ecoSpec = {
+  title: 'ECO test',
+  summary: '',
+  difficulty: 'beginner' as const,
+  components: [
+    { id: 'c1', name: 'Resistor', category: 'Passive', quantity: 1, designator: 'R1', pins: [], footprintId: 'old-fp' },
+    { id: 'c2', name: 'Capacitor', category: 'Passive', quantity: 1, designator: 'C1', pins: [], footprintId: 'fp-a' }
+  ],
+  connections: [],
+  steps: []
+}
+const testEco: Eco = {
+  id: 'eco_1',
+  createdAt: Date.now(),
+  actions: [
+    { type: 'change_footprint', designator: 'R1', newValue: 'new-fp', oldValue: 'old-fp' },
+    { type: 'place_component', designator: 'C1', newValue: null, oldValue: null }
+  ],
+  divergences: [],
+  autoResolvable: true
+}
+const nextSpec = applyEco(ecoSpec, testEco)
+check('applyEco changes footprint for R1', nextSpec.components.find((c) => c.designator === 'R1')!.footprintId === 'new-fp')
+check('applyEco does not mutate original spec', ecoSpec.components.find((c) => c.designator === 'R1')!.footprintId === 'old-fp')
+check('applyEco leaves C1 footprint unchanged', nextSpec.components.find((c) => c.designator === 'C1')!.footprintId === 'fp-a')
+
 // Run all async collaboration tests, then print the summary.
 ;(async () => {
   await runPresenceBroadcastTests()

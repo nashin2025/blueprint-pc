@@ -34,9 +34,10 @@ import {
   buildAnnotationLinks,
   findDivergences,
   generateEco,
+  applyEco,
   backwardAnnotation
 } from './annotation'
-import type { AnnotationLink, AnnotationDivergence } from './annotation'
+import type { AnnotationLink, AnnotationDivergence, Eco } from '@shared/types'
 import {
   createVariant,
   addVariantOverride,
@@ -1120,6 +1121,18 @@ export function registerIpc(): void {
     try {
       const diffs = compareBoms(args.bomA, args.bomB)
       return { ok: true as const, data: { diffs } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('eco:apply', async (_e, args: { projectId: string; eco: Eco }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const nextSpec = applyEco(project.spec, args.eco)
+      store.save({ ...project, spec: nextSpec })
+      return { ok: true as const, data: { project: { ...project, spec: nextSpec } } }
     } catch (err) {
       return fail(err)
     }

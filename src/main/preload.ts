@@ -28,7 +28,8 @@ import type {
   LibraryHealthReport,
   Variant,
   BomAlternative,
-  BomLineItem
+  BomLineItem,
+  Eco
 } from '@shared/types'
 
 /**
@@ -446,6 +447,16 @@ const api = {
     lifecycle: 'active' | 'preview' | 'nrnd' | 'obsolete'
   }): Promise<IpcResult<{ slug: string; lifecycle: string }>> =>
     ipcRenderer.invoke('library:update-lifecycle', args),
+
+  // Project import/export (.bpjson)
+  pcbExportProjectJson: (projectId: string): Promise<IpcResult<{ json: string }>> =>
+    ipcRenderer.invoke('projects:export-json', projectId),
+  pcbImportProjectJson: (args: { json: string }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('projects:import-json', args),
+
+  // ECO (Engineering Change Order)
+  ecoApply: (args: { projectId: string; eco: Eco }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('eco:apply', args),
 
   // Real-time collaboration
   collab: {

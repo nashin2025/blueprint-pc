@@ -13,70 +13,14 @@
  * application.
  */
 
-import type { Component, DesignSpec } from '@shared/types'
-
-/** One link between a schematic component and its PCB placement. */
-export interface AnnotationLink {
-  /** Schematic component ID. */
-  componentId: string
-  /** Reference designator (e.g. "C1", "R1"). */
-  designator: string
-  /** PCB placement ID (if placed). Null if not yet placed on PCB. */
-  placementId: string | null
-  /** PCB footprint (if assigned). Null if not yet assigned. */
-  footprintId: string | null
-  /** Net this component's pins connect to (from schematic). */
-  schematicNet: string | null
-  /** Net this component's pins connect to (from PCB). Null if not routed. */
-  pcbNet: string | null
-}
-
-/** One divergence between schematic and PCB. */
-export interface AnnotationDivergence {
-  /** Type of divergence. */
-  type:
-    | 'component_added'     // In schematic, not in PCB
-    | 'component_removed'   // In PCB, not in schematic
-    | 'footprint_changed'   // Different footprint on PCB vs schematic
-    | 'net_changed'         // Different net on PCB vs schematic
-    | 'unplaced'            // In schematic, not placed on PCB
-    | 'unrouted'            // Net in schematic, not routed on PCB
-  /** Schematic component ID (if applicable). */
-  componentId: string
-  /** Reference designator. */
-  designator: string
-  /** Human-readable description. */
-  message: string
-  /** Severity: 'error' blocks sync, 'warning' is advisory. */
-  severity: 'error' | 'warning'
-}
-
-/** One ECO (Engineering Change Order) action. */
-export interface EcoAction {
-  /** Action type. */
-  type:
-    | 'add_component'      // Add component to PCB
-    | 'remove_component'   // Remove component from PCB
-    | 'change_footprint'   // Change component footprint
-    | 'change_net'         // Change component net assignment
-    | 'place_component'    // Place unplaced component on PCB
-  /** Reference designator. */
-  designator: string
-  /** New value (footprint name, net name, etc. depending on type). */
-  newValue: string | null
-  /** Old value (for undo/review). */
-  oldValue: string | null
-}
-
-/** Complete ECO: a set of actions to bring PCB into sync with schematic. */
-export interface Eco {
-  id: string
-  createdAt: number
-  actions: EcoAction[]
-  divergences: AnnotationDivergence[]
-  /** True if all divergences can be resolved automatically. */
-  autoResolvable: boolean
-}
+import type {
+  Component,
+  DesignSpec,
+  AnnotationLink,
+  AnnotationDivergence,
+  EcoAction,
+  Eco
+} from '@shared/types'
 
 /**
  * Build annotation links between schematic components and PCB placements.
