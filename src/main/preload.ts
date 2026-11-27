@@ -29,7 +29,10 @@ import type {
   Variant,
   BomAlternative,
   BomLineItem,
-  Eco
+  Eco,
+  KeepInZone,
+  KeepOutZone,
+  Enclosure
 } from '@shared/types'
 
 /**
@@ -108,6 +111,22 @@ const api = {
     edgeClearance: Array<{ componentId: string; distance: number; clearance: number; violation: boolean }>
     clearance: number
   }>> => ipcRenderer.invoke('mech:clearance-check', args),
+
+  mechSaveZones: (args: {
+    projectId: string
+    keepInZones: KeepInZone[]
+    keepOutZones: KeepOutZone[]
+    enclosure: Enclosure | null
+  }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('mech:save-zones', args),
+  mechGetZones: (projectId: string): Promise<IpcResult<{
+    keepInZones: KeepInZone[]
+    keepOutZones: KeepOutZone[]
+    enclosure: Enclosure | null
+  }>> => ipcRenderer.invoke('mech:get-zones', { projectId }),
+  mechEnclosureCollision: (projectId: string): Promise<IpcResult<{
+    collisions: Array<{ componentId: string; distance: number }>
+  }>> => ipcRenderer.invoke('mech:enclosure-collision', { projectId }),
 
   pcbCheckClearance: (args: { projectId: string; clearance: number }): Promise<
     IpcResult<{

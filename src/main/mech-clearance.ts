@@ -9,6 +9,7 @@
  */
 
 import type { PcbPlacement } from './pcb-layout'
+import type { KeepInZone, KeepOutZone, Enclosure } from '@shared/types'
 
 /** One component-to-component clearance violation. */
 export interface ComponentClearanceViolation {
@@ -25,6 +26,28 @@ export interface BoardEdgeClearanceViolation {
   distance: number
   clearance: number
   violation: boolean
+}
+
+/** One keep-in zone violation: component is outside the zone. */
+export interface KeepInZoneViolation {
+  componentId: string
+  zoneId: string
+  zoneName: string
+  distance: number  // how far outside the zone (0 = on edge, negative = inside)
+}
+
+/** One keep-out zone violation: component overlaps the zone. */
+export interface KeepOutZoneViolation {
+  componentId: string
+  zoneId: string
+  zoneName: string
+  overlap: number  // overlap area in mm²
+}
+
+/** One enclosure collision violation: component collides with enclosure. */
+export interface EnclosureCollision {
+  componentId: string
+  distance: number  // how far outside the enclosure (0 = touching, negative = inside)
 }
 
 /** Build an AABB for a placement (centered, rotated rectangle). */
@@ -120,6 +143,101 @@ export function checkBoardEdgeClearance(
       clearance,
       violation: distance < clearance
     })
+  }
+
+  return violations
+}
+
+/** Check components against a keep-in zone. Returns violations for components
+ *  whose AABB is not fully inside the zone. */
+export function checkKeepInZone(
+  placements: PcbPlacement[],
+  zone: KeepInZone
+): KeepInZoneViolation[] {
+  const violations: KeepInZoneViolation[] = []
+  const zMinX = zone.x - zone.w / 2
+  const zMaxX = zone.x + zone.w / 2
+  const zMinY = zone.y - zone.h / 2
+  const zMaxY = zone.y + zone.h / 2
+
+  for (const p of placements) {
+    const box = placementAabb(p)
+    const outsideLeft = zMinX - box.minX
+    const outsideRight = box.maxX - zMaxX
+    const outsideBottom = zMinY - box.minY
+    const outsideTop = box.maxY - zMaxY
+    const maxOutside = Math.max(outsideLeft, outsideRight, outsideBottom, outsideTop)
+
+    if (maxOutside > 0) {
+      violations.push({
+        componentId: p.componentId,
+        zoneId: zone.id,
+        zoneName: zone.name,
+        distance: maxOutside
+      })
+    }
+  }
+
+  return violations
+}
+
+/** Check components against a keep-out zone. Returns violations for components
+ *  whose AABB overlaps the zone. */
+export function checkKeepOutZone(
+  placements: PcbPlacement[],
+  zone: KeepOutZone
+): KeepOutZoneViolation[] {
+  const violations: KeepOutZoneViolation[] = []
+  const zMinX = zone.x - zone.w / 2
+  const zMaxX = zone.x + zone.w / 2
+  const zMinY = zone.y - zone.h / 2
+  const zMaxY = zone.y + zone.h / 2
+
+  for (const p of placements) {
+    const box = placementAabb(p)
+    const overlapX = Math.max(0, Math.min(box.maxX, zMaxX) - Math.max(box.minX, zMinX))
+    const overlapY = Math.max(0, Math.min(box.maxY, zMaxY) - Math.max(box.minY, zMinY))
+    const overlap = overlapX * overlapY
+
+    if (overlap > 0) {
+      violations.push({
+        componentId: p.componentId,
+        zoneId: zone.id,
+        zoneName: zone.name,
+        overlap
+      })
+    }
+  }
+
+  return violations
+}
+
+/** Check components against a 3D enclosure box. Returns violations for components
+ *  whose AABB extends outside the enclosure (X/Y only, Z ignored for now). */
+export function checkEnclosureCollision(
+  placements: PcbPlacement[],
+  enclosure: Enclosure
+): EnclosureCollision[] {
+  const violations: EnclosureCollision[] = []
+  const eMinX = enclosure.x - enclosure.w / 2
+  const eMaxX = enclosure.x + enclosure.w / 2
+  const eMinY = enclosure.y - enclosure.h / 2
+  const eMaxY = enclosure.y + enclosure.h / 2
+
+  for (const p of placements) {
+    const box = placementAabb(p)
+    const outsideLeft = eMinX - box.minX
+    const outsideRight = box.maxX - eMaxX
+    const outsideBottom = eMinY - box.minY
+    const outsideTop = box.maxY - eMaxY
+    const maxOutside = Math.max(outsideLeft, outsideRight, outsideBottom, outsideTop)
+
+    if (maxOutside > 0) {
+      violations.push({
+        componentId: p.componentId,
+        distance: maxOutside
+      })
+    }
   }
 
   return violations

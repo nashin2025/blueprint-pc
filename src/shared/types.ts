@@ -315,6 +315,12 @@ export interface DesignSpec {
   hierarchicalBlocks?: HierarchicalBlock[]
   /** PCB design rules used for this design (trace width, clearance, etc.). */
   designRules?: PcbDesignRules
+  /** Keep-in zones: components must be placed inside these rectangles. */
+  keepInZones?: KeepInZone[]
+  /** Keep-out zones: components must not overlap these rectangles. */
+  keepOutZones?: KeepOutZone[]
+  /** 3D enclosure box for collision checking. */
+  enclosure?: Enclosure
 }
 
 export type ChatRole = 'user' | 'assistant'
@@ -571,6 +577,60 @@ export const DEFAULT_PCB_RULES: PcbDesignRules = {
   padToTraceClearance: 0.2,
   viaToTraceClearance: 0.2,
   minAnnularRing: 0.1
+}
+
+// ---------------------------------------------------------------------------
+// Mechanical keep-in / keep-out zones and enclosure
+// ---------------------------------------------------------------------------
+
+/** A keep-in zone: components must be placed inside this rectangle (mm). */
+export interface KeepInZone {
+  id: string
+  name: string
+  /** Zone centre X (mm). */
+  x: number
+  /** Zone centre Y (mm). */
+  y: number
+  /** Zone width (mm). */
+  w: number
+  /** Zone height (mm). */
+  h: number
+  /** PCB layer this zone applies to (e.g. 'top', 'bottom'). */
+  layer: string
+}
+
+/** A keep-out zone: components must not overlap this rectangle (mm). */
+export interface KeepOutZone {
+  id: string
+  name: string
+  /** Zone centre X (mm). */
+  x: number
+  /** Zone centre Y (mm). */
+  y: number
+  /** Zone width (mm). */
+  w: number
+  /** Zone height (mm). */
+  h: number
+  /** PCB layer this zone applies to (e.g. 'top', 'bottom'). */
+  layer: string
+}
+
+/** A 3D enclosure box for collision checking (mm). */
+export interface Enclosure {
+  id: string
+  name: string
+  /** Enclosure centre X (mm). */
+  x: number
+  /** Enclosure centre Y (mm). */
+  y: number
+  /** Enclosure centre Z (mm). */
+  z: number
+  /** Enclosure width (mm). */
+  w: number
+  /** Enclosure height (mm). */
+  h: number
+  /** Enclosure depth (mm). */
+  d: number
 }
 
 // ---------------------------------------------------------------------------

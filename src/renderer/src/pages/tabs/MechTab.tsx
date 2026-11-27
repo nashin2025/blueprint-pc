@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { STLLoader } from 'three/examples/jsm/loaders/STLLoader.js'
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js'
-import type { CadDiscoveryProgress, DesignSpec, IpcResult } from '@shared/types'
+import type { CadDiscoveryProgress, DesignSpec, Enclosure, IpcResult, KeepInZone, KeepOutZone } from '@shared/types'
 import { hasCadModel } from '@/lib/cadSources'
 import SectionView, { type SectionAxis } from '@/components/SectionView'
 import MeasurementTool, { measureDistance3D, type Vec3 } from '@/components/MeasurementTool'
@@ -90,11 +90,38 @@ export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoo
   const [modelUrls, setModelUrls] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState<Set<string>>(new Set())
   const discoveredRef = useRef<Set<string>>(new Set())
-  const [noCadFound, setNoCadFound] = useState<Set<string>>(new Set())
-  const [downloaded, setDownloaded] = useState<Set<string>>(new Set())
-  const [downloading, setDownloading] = useState<Set<string>>(new Set())
-  const [cadProgress, setCadProgress] = useState<CadDiscoveryProgress | null>(null)
-  const cadPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+const [noCadFound, setNoCadFound] = useState<Set<string>>(new Set())
+const [downloaded, setDownloaded] = useState<Set<string>>(new Set())
+const [downloading, setDownloading] = useState<Set<string>>(new Set())
+const [cadProgress, setCadProgress] = useState<CadDiscoveryProgress | null>(null)
+const cadPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+// ---------------------------------------------------------------------------
+// Keep-in / keep-out zones and enclosure state
+// ---------------------------------------------------------------------------
+
+const [keepInZones, setKeepInZones] = useState<KeepInZone[]>([])
+const [keepOutZones, setKeepOutZones] = useState<KeepOutZone[]>([])
+const [enclosure, setEnclosure] = useState<Enclosure | null>(null)
+const [zoneViolations, setZoneViolations] = useState<{
+  keepIn: Array<{ componentId: string; zoneId: string; zoneName: string; distance: number }>
+  keepOut: Array<{ componentId: string; zoneId: string; zoneName: string; overlap: number }>
+  enclosure: Array<{ componentId: string; distance: number }>
+}>({ keepIn: [], keepOut: [], enclosure: [] })
+
+// Zone editor state
+const [newZoneName, setNewZoneName] = useState('')
+const [newZoneX, setNewZoneX] = useState(0)
+const [newZoneY, setNewZoneY] = useState(0)
+const [newZoneW, setNewZoneW] = useState(20)
+const [newZoneH, setNewZoneH] = useState(20)
+const [newZoneType, setNewZoneType] = useState<'keepIn' | 'keepOut'>('keepIn')
+const [enclX, setEnclX] = useState(0)
+const [enclY, setEnclY] = useState(0)
+const [enclZ, setEnclZ] = useState(0)
+const [enclW, setEnclW] = useState(60)
+const [enclH, setEnclH] = useState(40)
+const [enclD, setEnclD] = useState(40)
 
   // ---------------------------------------------------------------------------
   // Section plane state
@@ -253,6 +280,70 @@ export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoo
       cancelled = true
     }
   }, [])
+
+  // ---------------------------------------------------------------------------
+  // Load keep-in/keep-out zones and enclosure on mount
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const res = await window.api.mechGetZones(projectId)
+        if (res.ok && res.data) {
+          setKeepInZones(res.data.keepInZones)
+          setKeepOutZones(res.data.keepOutZones)
+          setEnclosure(res.data.enclosure)
+        }
+      } catch {
+        // Zones are optional; leave empty.
+      }
+    })()
+  }, [projectId])
+
+  async function handleSaveZones() {
+    try {
+      const res = await window.api.mechSaveZones({
+        projectId,
+        keepInZones,
+        keepOutZones,
+        enclosure
+      })
+      if (!res.ok) throw new Error(res.error)
+    } catch (err) {
+      console.error('Save zones failed:', err)
+    }
+  }
+
+  function addZone() {
+    if (!newZoneName.trim()) return
+    const zone = {
+      id: `zone_${Date.now()}`,
+      name: newZoneName,
+      x: newZoneX,
+      y: newZoneY,
+      w: newZoneW,
+      h: newZoneH,
+      layer: 'top'
+    }
+    if (newZoneType === 'keepIn') {
+      setKeepInZones([...keepInZones, zone as KeepInZone])
+    } else {
+      setKeepOutZones([...keepOutZones, zone as KeepOutZone])
+    }
+    setNewZoneName('')
+  }
+
+  function removeKeepInZone(id: string) {
+    setKeepInZones(keepInZones.filter((z) => z.id !== id))
+  }
+
+  function removeKeepOutZone(id: string) {
+    setKeepOutZones(keepOutZones.filter((z) => z.id !== id))
+  }
+
+  function setEnclosureFromForm() {
+    setEnclosure({ id: 'enclosure_1', name: 'Enclosure', x: enclX, y: enclY, z: enclZ, w: enclW, h: enclH, d: enclD })
+  }
 
   // ---------------------------------------------------------------------------
   // Keep the measurement ref in sync so the canvas click handler reads fresh state
@@ -535,6 +626,38 @@ export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoo
       scene.add(mesh)
     })
 
+    // Draw keep-in zones (green wireframe) and keep-out zones (red wireframe)
+    const zoneMeshes: THREE.Mesh[] = []
+    for (const zone of keepInZones) {
+      const geo = new THREE.BoxGeometry(zone.w, 0.1, zone.h)
+      const mat = new THREE.MeshBasicMaterial({ color: 0x46c79a, wireframe: true, transparent: true, opacity: 0.5 })
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.position.set(zone.x, 0.05, zone.y)
+      mesh.userData = { type: 'zone', zoneId: zone.id }
+      scene.add(mesh)
+      zoneMeshes.push(mesh)
+    }
+    for (const zone of keepOutZones) {
+      const geo = new THREE.BoxGeometry(zone.w, 0.1, zone.h)
+      const mat = new THREE.MeshBasicMaterial({ color: 0xe5544b, wireframe: true, transparent: true, opacity: 0.5 })
+      const mesh = new THREE.Mesh(geo, mat)
+      mesh.position.set(zone.x, 0.05, zone.y)
+      mesh.userData = { type: 'zone', zoneId: zone.id }
+      scene.add(mesh)
+      zoneMeshes.push(mesh)
+    }
+
+    // Draw enclosure (blue wireframe)
+    if (enclosure) {
+      const geo = new THREE.BoxGeometry(enclosure.w, enclosure.h, enclosure.d)
+      const mat = new THREE.MeshBasicMaterial({ color: 0x4f8cff, wireframe: true, transparent: true, opacity: 0.3 })
+      const encMesh = new THREE.Mesh(geo, mat)
+      encMesh.position.set(enclosure.x, enclosure.y, enclosure.z)
+      encMesh.userData = { type: 'enclosure' }
+      scene.add(encMesh)
+      zoneMeshes.push(encMesh)
+    }
+
     let frameId: number
     const lastZoomReport = useRef(0)
     const initialDistance = Math.sqrt(5 * 5 + 5 * 5 + 5 * 5) // camera starts at (5,5,5)
@@ -597,9 +720,10 @@ export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoo
       cancelAnimationFrame(frameId)
       controls.dispose()
       renderer.dispose()
+      zoneMeshes.forEach((m) => scene.remove(m))
       container.removeChild(renderer.domElement)
     }
-  }, [spec.components, onCanvasZoom, applySectionClipping, measurementEnabled])
+  }, [spec.components, onCanvasZoom, applySectionClipping, measurementEnabled, keepInZones, keepOutZones, enclosure])
 
   // ---------------------------------------------------------------------------
   // Section plane -> Three.js clipping planes (handles section changes when the
@@ -642,6 +766,28 @@ export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoo
       })
     })()
   }, [clearanceEnabled, clearanceThreshold, projectId, captureOriginalColor, applyColorToPart, restoreOriginalColors])
+
+  // ---------------------------------------------------------------------------
+  // Zone violation checking (keep-in / keep-out / enclosure)
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    void (async () => {
+      const enclosureCollisions: Array<{ componentId: string; distance: number }> = []
+
+      // Check enclosure collision via IPC
+      if (enclosure) {
+        const res = await window.api.mechEnclosureCollision(projectId)
+        if (res.ok && res.data) {
+          for (const c of res.data.collisions) {
+            enclosureCollisions.push({ componentId: c.componentId, distance: c.distance })
+          }
+        }
+      }
+
+      setZoneViolations({ keepIn: [], keepOut: [], enclosure: enclosureCollisions })
+    })()
+  }, [spec.components, keepInZones, keepOutZones, enclosure, projectId])
 
   // ---------------------------------------------------------------------------
   // Persist model URLs from the component spec into local state
@@ -886,6 +1032,194 @@ export default function MechTab({ spec, projectId, onModelUrlChange, onCanvasZoo
           onCheck={() => void 0}
           violationCount={clearanceViolations.length}
         />
+      </div>
+
+      {/* Zone editor */}
+      <div className="rounded-lg border border-line bg-surface-1 p-4 mb-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold tracking-tight">Keep-in / Keep-out Zones &amp; Enclosure</h3>
+          <button
+            onClick={handleSaveZones}
+            className="rounded px-2.5 py-1 text-[11px] font-medium transition bg-accent text-white border-transparent hover:bg-accent/90"
+          >
+            Save zones
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-3">
+          <div>
+            <h4 className="text-[10px] font-semibold text-ink-faint mb-1">Add zone</h4>
+            <div className="space-y-1">
+              <input
+                type="text"
+                placeholder="Name"
+                value={newZoneName}
+                onChange={(e) => setNewZoneName(e.target.value)}
+                className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+              />
+              <div className="grid grid-cols-2 gap-1">
+                <input
+                  type="number"
+                  placeholder="X"
+                  value={newZoneX}
+                  onChange={(e) => setNewZoneX(Number(e.target.value) || 0)}
+                  className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+                />
+                <input
+                  type="number"
+                  placeholder="Y"
+                  value={newZoneY}
+                  onChange={(e) => setNewZoneY(Number(e.target.value) || 0)}
+                  className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-1">
+                <input
+                  type="number"
+                  placeholder="W"
+                  value={newZoneW}
+                  onChange={(e) => setNewZoneW(Number(e.target.value) || 0)}
+                  className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+                />
+                <input
+                  type="number"
+                  placeholder="H"
+                  value={newZoneH}
+                  onChange={(e) => setNewZoneH(Number(e.target.value) || 0)}
+                  className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+                />
+              </div>
+              <select
+                value={newZoneType}
+                onChange={(e) => setNewZoneType(e.target.value as 'keepIn' | 'keepOut')}
+                className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+              >
+                <option value="keepIn">Keep-in</option>
+                <option value="keepOut">Keep-out</option>
+              </select>
+              <button
+                onClick={addZone}
+                className="w-full rounded px-2 py-1 text-[11px] font-medium transition bg-accent text-white border-transparent hover:bg-accent/90"
+              >
+                Add
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-[10px] font-semibold text-ink-faint mb-1">Keep-in zones</h4>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {keepInZones.map((z) => (
+                <div
+                  key={z.id}
+                  className="flex items-center justify-between gap-2 p-1 rounded border border-line/50 bg-surface-2/40 text-[11px]"
+                >
+                  <span className="truncate">{z.name}</span>
+                  <div className="flex gap-1">
+                    <span className="text-ink-faint">{z.w}×{z.h}mm</span>
+                    <button
+                      onClick={() => removeKeepInZone(z.id)}
+                      className="rounded p-0.5 hover:bg-danger/5 hover:text-danger"
+                      title="Remove"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {keepInZones.length === 0 && <span className="text-[10px] text-ink-faint">None</span>}
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-[10px] font-semibold text-ink-faint mb-1">Keep-out zones</h4>
+            <div className="space-y-1 max-h-32 overflow-y-auto">
+              {keepOutZones.map((z) => (
+                <div
+                  key={z.id}
+                  className="flex items-center justify-between gap-2 p-1 rounded border border-line/50 bg-surface-2/40 text-[11px]"
+                >
+                  <span className="truncate">{z.name}</span>
+                  <div className="flex gap-1">
+                    <span className="text-ink-faint">{z.w}×{z.h}mm</span>
+                    <button
+                      onClick={() => removeKeepOutZone(z.id)}
+                      className="rounded p-0.5 hover:bg-danger/5 hover:text-danger"
+                      title="Remove"
+                    >
+                      ×
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {keepOutZones.length === 0 && <span className="text-[10px] text-ink-faint">None</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="border-t border-line/50 pt-3">
+          <h4 className="text-[10px] font-semibold text-ink-faint mb-1">3D Enclosure</h4>
+          <div className="grid grid-cols-3 gap-2">
+            <input
+              type="number"
+              placeholder="X"
+              value={enclX}
+              onChange={(e) => setEnclX(Number(e.target.value) || 0)}
+              className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+            />
+            <input
+              type="number"
+              placeholder="Y"
+              value={enclY}
+              onChange={(e) => setEnclY(Number(e.target.value) || 0)}
+              className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+            />
+            <input
+              type="number"
+              placeholder="Z"
+              value={enclZ}
+              onChange={(e) => setEnclZ(Number(e.target.value) || 0)}
+              className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+            />
+            <input
+              type="number"
+              placeholder="W"
+              value={enclW}
+              onChange={(e) => setEnclW(Number(e.target.value) || 0)}
+              className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+            />
+            <input
+              type="number"
+              placeholder="H"
+              value={enclH}
+              onChange={(e) => setEnclH(Number(e.target.value) || 0)}
+              className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+            />
+            <input
+              type="number"
+              placeholder="D"
+              value={enclD}
+              onChange={(e) => setEnclD(Number(e.target.value) || 0)}
+              className="rounded border border-line bg-surface-0 px-2 py-1 text-[11px] outline-none focus:border-line-bright"
+            />
+          </div>
+          <button
+            onClick={setEnclosureFromForm}
+            className="w-full rounded px-2 py-1 text-[11px] font-medium transition bg-accent text-white border-transparent hover:bg-accent/90 mt-1"
+          >
+            Set enclosure
+          </button>
+          {enclosure && (
+            <p className="mt-1 text-[10px] text-ink-faint">
+              Enclosure: {enclosure.w}×{enclosure.h}×{enclosure.d}mm at ({enclosure.x}, {enclosure.y}, {enclosure.z})
+            </p>
+          )}
+          {zoneViolations.enclosure.length > 0 && (
+            <p className="mt-1 text-[10px] text-red-500">
+              {zoneViolations.enclosure.length} component(s) outside enclosure
+            </p>
+          )}
+        </div>
       </div>
 
       {/* 3D scene */}

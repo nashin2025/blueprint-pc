@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, BomAlternative, BomLineItem, Component, Connection, DesignSpec, DielectricStackup, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, LibraryHealthReport, PcbDesignRules, Project, Sheet, SheetPort, Variant } from '@shared/types'
+import type { AppSettings, BomAlternative, BomLineItem, Component, Connection, DesignSpec, DielectricStackup, Enclosure, Footprint, GenerateRequest, HierarchicalBlock, InfoRequest, KeepInZone, KeepOutZone, LibraryHealthReport, PcbDesignRules, Project, Sheet, SheetPort, Variant } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -45,7 +45,7 @@ import {
   generateBomForVariant,
   compareBoms
 } from './variants'
-import { checkComponentClearance, checkBoardEdgeClearance } from './mech-clearance'
+import { checkComponentClearance, checkBoardEdgeClearance, checkEnclosureCollision } from './mech-clearance'
 import { collabServer } from './collaboration'
 import {
   analyseTrace,
@@ -952,6 +952,60 @@ export function registerIpc(): void {
       const edgeClearance = checkBoardEdgeClearance(placed, boardW, boardH, clearance)
 
       return { ok: true as const, data: { componentClearance: compClearance, edgeClearance, clearance } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('mech:save-zones', async (_e, args: { projectId: string; keepInZones: KeepInZone[]; keepOutZones: KeepOutZone[]; enclosure: Enclosure | null }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const nextSpec = {
+        ...project.spec,
+        keepInZones: args.keepInZones,
+        keepOutZones: args.keepOutZones,
+        enclosure: args.enclosure ?? undefined
+      }
+      store.save({ ...project, spec: nextSpec })
+      return { ok: true as const, data: { project: { ...project, spec: nextSpec } } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('mech:get-zones', async (_e, args: { projectId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      return { ok: true as const, data: {
+        keepInZones: project.spec.keepInZones ?? [],
+        keepOutZones: project.spec.keepOutZones ?? [],
+        enclosure: project.spec.enclosure ?? null
+      } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('mech:enclosure-collision', async (_e, args: { projectId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const { spec } = project
+      const enclosure = spec.enclosure
+      if (!enclosure) return { ok: true as const, data: { collisions: [] } }
+
+      const boardW = 100
+      const boardH = 80
+      const componentIds = spec.components.map((c) => c.id)
+      const names = Object.fromEntries(spec.components.map((c) => [c.id, c.name]))
+      const { placements } = placeComponents(componentIds, names, boardW, boardH)
+      const pinNamesByComponent = Object.fromEntries(spec.components.map((c) => [c.id, c.pins]))
+      const placed = attachPads(placements, pinNamesByComponent)
+
+      const collisions = checkEnclosureCollision(placed, enclosure)
+      return { ok: true as const, data: { collisions } }
     } catch (err) {
       return fail(err)
     }
