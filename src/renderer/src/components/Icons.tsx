@@ -190,3 +190,21 @@ export function RefreshIcon({ size = 16, className }: IconProps) {
     </svg>
   )
 }
+
+export function FootprintIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="5" y="7" width="14" height="10" rx="1" />
+      <path d="M4 9.5h1M4 12h1M4 14.5h1M19 9.5h-1M19 12h-1M19 14.5h-1" />
+    </svg>
+  )
+}
+
+export function LandIcon({ size = 16, className }: IconProps) {
+  return (
+    <svg {...base(size, className)}>
+      <rect x="4" y="4" width="16" height="16" rx="1" />
+      <path d="M5 5v2M18 5v2M5 17v2M18 17v2M5 5h2M5 17h2M17 5h2M17 17h2" />
+    </svg>
+  )
+}

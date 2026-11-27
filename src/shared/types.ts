@@ -36,8 +36,61 @@ export interface Component {
   datasheet?: string
   /** Reference designator, e.g. "R1", "C2", "U1". Assigned when added to a project. */
   designator?: string
+  /** Id of the footprint (land pattern) this component uses on the PCB. */
+  footprintId?: string
   pins: string[]
   notes?: string
+}
+
+/** One solder pad in a component footprint (land pattern). All values in mm. */
+export interface FootprintPad {
+  id: string
+  /** Pad centre X relative to the footprint origin (body centre). */
+  x: number
+  /** Pad centre Y relative to the footprint origin (body centre). */
+  y: number
+  /** Pad width, mm. */
+  w: number
+  /** Pad height, mm. */
+  h: number
+  shape: 'rect' | 'round' | 'oval'
+}
+
+/** A component footprint / land pattern, with pad array and body outline. */
+export interface Footprint {
+  id: string
+  name: string
+  description?: string
+  pads: FootprintPad[]
+  outlineW: number
+  outlineH: number
+  createdAt: number
+}
+
+/** Kind of land pattern to generate. */
+export type FootprintKind = 'sop' | 'dip' | 'qfn' | 'smd-resistor' | 'smd-capacitor' | 'custom'
+
+/** Parameters for generating a land pattern. */
+export interface LandPatternParams {
+  type: FootprintKind
+  /** Number of pins/pads. Even for SOP/DIP, multiple of 4 for QFN. */
+  pinCount?: number
+  /** Centre-to-centre pitch between adjacent pads, mm. */
+  pitch?: number
+  /** Body width, mm. */
+  bodyWidth?: number
+  /** Body height, mm. */
+  bodyHeight?: number
+  /** Pad width, mm (extent sticking out from the body edge). */
+  padWidth?: number
+  /** Pad length, mm (extent running along the body edge). */
+  padLength?: number
+  /** Clearance from the body edge to the inner edge of the pad, mm. */
+  padToBodyClearance?: number
+  /** Optional centre thermal pad for QFN. */
+  centerPad?: { w: number; h: number }
+  /** Explicit pad list for the 'custom' type. */
+  customPads?: Array<{ x: number; y: number; w: number; h: number }>
 }
 
 export interface Connection {
@@ -112,6 +165,8 @@ export interface DesignSpec {
   sheets?: Sheet[]
   /** Sheet-to-sheet port connectors. */
   ports?: SheetPort[]
+  /** Component footprints (land patterns) available to this design. */
+  footprints?: Footprint[]
 }
 
 export type ChatRole = 'user' | 'assistant'

@@ -11,7 +11,7 @@ import CommandPalette from './components/CommandPalette'
 import StatusBar from './components/StatusBar'
 import CartDrawer from './components/CartDrawer'
 
-type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part' | 'sheets'
+type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part' | 'sheets' | 'footprints'
 
 const TABS_ORDER: TabId[] = [
   'overview',
@@ -21,7 +21,8 @@ const TABS_ORDER: TabId[] = [
   'chat',
   'product',
   'part',
-  'sheets'
+  'sheets',
+  'footprints'
 ]
 
 interface AppProps {
@@ -61,7 +62,8 @@ export default function App({ errorCount = 0 }: AppProps = {}) {
       chat: 'Chat',
       product: 'Product',
       part: 'Part',
-      sheets: 'Sheets'
+      sheets: 'Sheets',
+      footprints: 'Footprints'
     }
     const actions: Array<{
       id: string

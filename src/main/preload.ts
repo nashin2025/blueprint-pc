@@ -8,6 +8,7 @@ import type {
   Connection,
   DesignSpec,
   DesignVersion,
+  Footprint,
   GenerateRequest,
   InfoRequest,
   IpcResult,
@@ -178,7 +179,17 @@ const api = {
     portId1: string
     portId2: string
   }): Promise<IpcResult<{ project: Project; connection: Connection }>> =>
-    ipcRenderer.invoke('sheets:connect-port', args)
+    ipcRenderer.invoke('sheets:connect-port', args),
+
+  // Footprints
+  footprintsAdd: (args: { projectId: string; footprint: Footprint }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('footprints:add', args),
+  footprintsUpdate: (args: { projectId: string; footprint: Footprint }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('footprints:update', args),
+  footprintsDelete: (args: { projectId: string; footprintId: string }): Promise<IpcResult<{ project: Project }>> =>
+    ipcRenderer.invoke('footprints:delete', args),
+  footprintsGenerateLandPattern: (args: { kind: string; params: Record<string, number> }): Promise<IpcResult<{ footprint: Footprint }>> =>
+    ipcRenderer.invoke('footprints:generate-land-pattern', args)
 }
 
 export type Bridge = typeof api

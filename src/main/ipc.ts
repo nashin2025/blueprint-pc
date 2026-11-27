@@ -17,7 +17,7 @@ import { searchSnapedaPart, getSnapeda3dUrl } from './snapeda'
 import { login, logout, getSessionCookie, isAuthenticated } from './grabcad/auth'
 import { searchGrabcadParts } from './grabcad/search'
 import { getModelArchiveUrl, downloadAndExtractModel } from './grabcad/download'
-import type { AppSettings, Connection, DesignSpec, GenerateRequest, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
+import type { AppSettings, Connection, DesignSpec, Footprint, GenerateRequest, InfoRequest, PcbDesignRules, Project, Sheet, SheetPort } from '@shared/types'
 import { createBundle, extractBundle } from './zip'
 import { runDrc, summarizeDrc } from './drc'
 import { buildNetlist } from './netlist'
@@ -25,6 +25,7 @@ import { getDrcRules, saveDrcRules } from './drc-rules'
 import { placeComponents, attachPads, routeTraces } from './pcb-layout'
 import type { PcbPad, PcbVia } from './pcb-layout'
 import { generateGerberFiles } from './gerber'
+import { generateLandPattern } from './footprint-generator'
 
 /**
  * Every IPC channel is registered once at startup. Each handler returns an
@@ -468,6 +469,67 @@ export function registerIpc(): void {
         ok: true as const,
         data: { files, unrouted, boardW, boardH },
       }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('footprints:add', async (_e, args: { projectId: string; footprint: Footprint }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const nextSpec: typeof project.spec = {
+        ...project.spec,
+        footprints: [...(project.spec.footprints ?? []), args.footprint]
+      }
+      await store.save({ ...project, spec: nextSpec })
+      return { ok: true as const, data: { project: { ...project, spec: nextSpec } } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('footprints:update', async (_e, args: { projectId: string; footprint: Footprint }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const nextFootprints = (project.spec.footprints ?? []).map((f) =>
+        f.id === args.footprint.id ? args.footprint : f
+      )
+      const nextSpec: typeof project.spec = {
+        ...project.spec,
+        footprints: nextFootprints
+      }
+      await store.save({ ...project, spec: nextSpec })
+      return { ok: true as const, data: { project: { ...project, spec: nextSpec } } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('footprints:delete', async (_e, args: { projectId: string; footprintId: string }) => {
+    try {
+      const project = store.get(args.projectId)
+      if (!project) return { ok: false, error: `Project not found: ${args.projectId}` }
+      const nextFootprints = (project.spec.footprints ?? []).filter((f) => f.id !== args.footprintId)
+      const nextSpec: typeof project.spec = {
+        ...project.spec,
+        footprints: nextFootprints
+      }
+      await store.save({ ...project, spec: nextSpec })
+      return { ok: true as const, data: { project: { ...project, spec: nextSpec } } }
+    } catch (err) {
+      return fail(err)
+    }
+  })
+
+  ipcMain.handle('footprints:generate-land-pattern', async (_e, args: { kind: string; params: Record<string, number> }) => {
+    try {
+      const footprint = generateLandPattern({
+        kind: args.kind as any,
+        ...args.params
+      } as any)
+      return { ok: true as const, data: { footprint } }
     } catch (err) {
       return fail(err)
     }

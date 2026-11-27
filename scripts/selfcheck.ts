@@ -18,6 +18,8 @@ import {
   isImageContentType,
   isSafeUrl
 } from '../src/main/partimage-parse.ts'
+import { generateLandPattern } from '../src/main/footprint-generator.ts'
+import type { Footprint } from '../src/shared/types.ts'
 import { ALL_CATEGORIES, categoryKey, partArt } from '../src/renderer/src/lib/partArt.ts'
 import { componentLines, imagePromptFor, summaryMessagesFor, wiringLines } from '../src/main/ai/info-prompts.ts'
 import { layoutWiring } from '../src/renderer/src/lib/wiringLayout.ts'
@@ -1075,6 +1077,34 @@ check('Sheets: connect-port rejects missing port', missing === null)
 // array shows one option per sheet.
 const selectorSheetCount = baseSheets.length
 check('SheetSelector: option count matches sheet count', selectorSheetCount === 2)
+
+// ---------------------------------------------------------------------------
+// Footprint library
+// ---------------------------------------------------------------------------
+
+// Land pattern generation produces correct pad counts.
+const sop8 = generateLandPattern({ type: 'sop', pinCount: 8, pitch: 1.27, bodyWidth: 4.4, bodyHeight: 6.0, padWidth: 0.6, padLength: 1.2 })
+check('Footprint: SOP-8 generates 8 pads', sop8.pads.length === 8)
+check('Footprint: SOP-8 pads have correct X spacing', Math.abs(sop8.pads[0].x - sop8.pads[1].x) >= 1.2)
+
+const dip16 = generateLandPattern({ type: 'dip', pinCount: 16, pitch: 2.54, bodyWidth: 19.1, bodyHeight: 6.4, padWidth: 0.7, padLength: 1.8 })
+check('Footprint: DIP-16 generates 16 pads', dip16.pads.length === 16)
+check('Footprint: DIP-16 pads have correct X spacing', Math.abs(dip16.pads[0].x - dip16.pads[1].x) >= 2.5)
+
+const qfn20 = generateLandPattern({ type: 'qfn', pinCount: 20, pitch: 0.5, bodyWidth: 4.0, bodyHeight: 4.0, padWidth: 0.25, padLength: 0.8 })
+check('Footprint: QFN-20 generates 20 pads', qfn20.pads.length === 20)
+
+const res0603 = generateLandPattern({ type: 'smd-resistor', padWidth: 0.8, padLength: 0.8, padToBodyClearance: 0.3 })
+check('Footprint: 0603 resistor generates 2 pads', res0603.pads.length === 2)
+check('Footprint: 0603 resistor pads separated', Math.abs(res0603.pads[0].x - res0603.pads[1].x) >= 1.0)
+
+// Land pattern outline matches body dimensions.
+check('Footprint: SOP-8 outline width', Math.abs(sop8.outlineW - 4.4) < 0.01)
+check('Footprint: SOP-8 outline height', Math.abs(sop8.outlineH - 6.0) < 0.01)
+
+// Custom pattern passes through parameters.
+const custom = generateLandPattern({ type: 'custom', padWidth: 1.0, padLength: 2.0, padToBodyClearance: 0.5, customPads: [{ x: 0, y: 0, w: 1.0, h: 2.0 }, { x: 5, y: 0, w: 1.0, h: 2.0 }] })
+check('Footprint: custom passes through pad dimensions', custom.pads.length === 2 && custom.pads[0].w === 1.0 && custom.pads[0].h === 2.0)
 
 // ---------------------------------------------------------------------------
 console.log(`\n${checks - failures}/${checks} checks passed`)

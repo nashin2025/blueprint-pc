@@ -1,10 +1,21 @@
 import { useState, useEffect } from 'react'
 import type { ComponentType } from 'react'
-import type { Component, Connection, DesignVersion, DrcSummary, DrcViolation, Project, Sheet, SheetPort } from '@shared/types'
+import type { Component, Connection, DesignVersion, DrcSummary, DrcViolation, Footprint, Project, Sheet, SheetPort } from '@shared/types'
 import { useApp, newId } from '../state/useApp'
 import { DIFFICULTY_LABELS, DIFFICULTY_STYLES, currency, relativeTime } from '../lib/format'
 import { exportBomCsv, exportProjectJson, exportWiringSvg } from '../lib/export'
-import { CircuitIcon, DownloadIcon, ListIcon, ChatIcon, TrashIcon, SparkIcon, SheetIcon } from '../components/Icons'
+import {
+  CircuitIcon,
+  DownloadIcon,
+  ListIcon,
+  ChatIcon,
+  TrashIcon,
+  SparkIcon,
+  SheetIcon,
+  PlusIcon,
+  EditIcon,
+  FootprintIcon
+} from '../components/Icons'
 import OverviewTab from './tabs/OverviewTab'
 import PartsTab from './tabs/PartsTab'
 import WiringTab from './tabs/WiringTab'
@@ -15,8 +26,18 @@ import PartTab from './tabs/PartTab'
 import ChatTab from './tabs/ChatTab'
 import InfoTab from './tabs/InfoTab'
 import InspectorPanel from '../components/InspectorPanel'
+import FootprintEditor from '../components/FootprintEditor'
 
-type TabId = 'overview' | 'bom' | 'wiring' | 'mech' | 'chat' | 'product' | 'part' | 'sheets'
+type TabId =
+  | 'overview'
+  | 'bom'
+  | 'wiring'
+  | 'mech'
+  | 'chat'
+  | 'product'
+  | 'part'
+  | 'sheets'
+  | 'footprints'
 
 const TABS: Array<{ id: TabId; label: string; icon: ComponentType<{ size?: number }> }> = [
   { id: 'overview', label: 'OVERVIEW', icon: CircuitIcon },
@@ -26,7 +47,8 @@ const TABS: Array<{ id: TabId; label: string; icon: ComponentType<{ size?: numbe
   { id: 'chat', label: 'CHAT', icon: ChatIcon },
   { id: 'product', label: 'PRODUCT', icon: SparkIcon },
   { id: 'part', label: 'PART', icon: CircuitIcon },
-  { id: 'sheets', label: 'SHEETS', icon: SheetIcon }
+  { id: 'sheets', label: 'SHEETS', icon: SheetIcon },
+  { id: 'footprints', label: 'FOOTPRINTS', icon: FootprintIcon }
 ]
 
 interface ProjectViewProps {
@@ -47,10 +69,14 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
   const [drcChecking, setDrcChecking] = useState(false)
   const [versionDialogOpen, setVersionDialogOpen] = useState(false)
   const [versions, setVersions] = useState<DesignVersion[]>([])
+  /** Footprint editor: open + the footprint being edited (null = add). */
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editingFootprint, setEditingFootprint] = useState<Footprint | null>(null)
   /** Id of the currently active sheet in a multi-sheet design. */
   const [activeSheetId, setActiveSheetId] = useState<string | null>(null)
 
   const spec = project.spec
+  const footprints = spec.footprints ?? []
   const partsCost = spec.components.reduce((sum, c) => sum + (c.unitPrice ?? 0) * c.quantity, 0)
   const pricedCount = spec.components.filter((c) => c.unitPrice).length
 
@@ -80,6 +106,35 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
     const nextSpec: typeof spec = { ...spec, components: nextComponents }
     await upsertProject({ ...project, spec: nextSpec })
     setInspectorComponent(null)
+  }
+
+  async function onAddFootprint(footprint: Footprint) {
+    const res = await window.api.footprintsAdd({ projectId: project.id, footprint })
+    if (res.ok && res.data) {
+      await upsertProject(res.data.project)
+      setEditorOpen(false)
+      setEditingFootprint(null)
+    }
+  }
+
+  async function onUpdateFootprint(footprint: Footprint) {
+    const res = await window.api.footprintsUpdate({ projectId: project.id, footprint })
+    if (res.ok && res.data) {
+      await upsertProject(res.data.project)
+      setEditorOpen(false)
+      setEditingFootprint(null)
+    }
+  }
+
+  async function onDeleteFootprint(footprintId: string) {
+    const confirmed = window.confirm(
+      `Delete this footprint? It will be removed from any components referencing it.`
+    )
+    if (!confirmed) return
+    const res = await window.api.footprintsDelete({ projectId: project.id, footprintId })
+    if (res.ok && res.data) {
+      await upsertProject(res.data.project)
+    }
   }
 
   async function onSheetChange(sheetId: string) {
@@ -565,6 +620,80 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
             onAddPort={onAddPort}
           />
         )}
+        {activeTab === 'footprints' && (
+          <div className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold tracking-tight">Footprint Library</h3>
+              <button
+                onClick={() => {
+                  setEditingFootprint(null)
+                  setEditorOpen(true)
+                }}
+                className="flex items-center gap-1.5 rounded-lg border border-line bg-surface-1 px-3 py-1.5 text-[13px] text-ink-dim transition hover:border-line-bright hover:text-ink"
+              >
+                <PlusIcon size={13} />
+                Add Footprint
+              </button>
+            </div>
+            {footprints.length === 0 ? (
+              <div className="flex flex-col items-center justify-center py-10 text-center">
+                <div className="mx-auto flex size-10 items-center justify-center rounded-lg border border-line bg-surface-1">
+                  <FootprintIcon size={20} className="text-ink-faint" />
+                </div>
+                <h3 className="mt-3 text-sm font-medium">No footprints yet</h3>
+                <p className="mt-1 text-[13px] leading-relaxed text-ink-dim">
+                  Add a footprint from the button above, or generate one from a standard land pattern.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {footprints.map((fp) => (
+                  <div
+                    key={fp.id}
+                    className="rounded border border-line bg-surface-1 p-3"
+                  >
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="font-medium text-sm truncate">{fp.name}</div>
+                      <button
+                        onClick={() => {
+                          setEditingFootprint(fp)
+                          setEditorOpen(true)
+                        }}
+                        className="rounded border border-line bg-surface-1 px-2 py-1 text-[11px] text-ink-dim transition hover:border-line-bright hover:text-ink"
+                        title="Edit footprint"
+                      >
+                        <EditIcon size={12} />
+                      </button>
+                      <button
+                        onClick={() => onDeleteFootprint(fp.id)}
+                        className="rounded border border-line bg-surface-1 px-2 py-1 text-[11px] text-ink-dim transition hover:bg-danger/5 hover:text-danger"
+                        title="Delete footprint"
+                      >
+                        <TrashIcon size={12} />
+                      </button>
+                    </div>
+                    <div className="text-[11px] text-ink-faint mb-2">
+                      {fp.pads.length} pad(s) · {fp.outlineW.toFixed(1)} × {fp.outlineH.toFixed(1)} mm
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {fp.pads.slice(0, 6).map((pad) => (
+                        <div
+                          key={pad.id}
+                          className={`size-3 rounded border border-line ${
+                            pad.shape === 'round' ? 'rounded-full' : ''
+                          } ${pad.shape === 'round' ? 'bg-surface-2' : 'bg-accent/10'}`}
+                        />
+                      ))}
+                      {fp.pads.length > 6 && (
+                        <span className="text-[10px] text-ink-faint">+{fp.pads.length - 6}</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {inspectorComponent && (
@@ -646,6 +775,19 @@ export default function ProjectView({ project, activeTab, onTabChange, onCanvasZ
                 Save current version
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {editorOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-ink/40 backdrop-blur-sm" onClick={() => setEditorOpen(false)} />
+          <div className="relative z-10 w-full max-w-2xl p-4 bg-surface-0 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <FootprintEditor
+              spec={spec}
+              footprint={editingFootprint ?? undefined}
+              onSave={editingFootprint ? onUpdateFootprint : onAddFootprint}
+              onCancel={() => setEditorOpen(false)}
+            />
           </div>
         </div>
       )}
